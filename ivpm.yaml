@@ -1,0 +1,21 @@
+package:
+  name: zuspec-trace
+
+  dep-sets:
+  - name: default-dev
+    deps:
+    - name: pytest-dfm
+      url: https://github.com/dv-flow/pytest-dfm.git
+    - name: dv-flow-mgr
+      url: https://github.com/dv-flow/dv-flow-mgr.git
+    - name: dv-flow-libhdlsim
+      url: https://github.com/dv-flow/dv-flow-libhdlsim.git
+    - name: verilator
+      src: gh-rls
+      url: https://github.com/edapack/verilator-bin
+      cache: true
+    - name: sphinx
+      src: pypi
+    - name: lz4
+      src: pypi
+
