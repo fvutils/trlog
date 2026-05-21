@@ -19,6 +19,7 @@ from ._codec import encode_uvarint, decode_uvarint
 from ._string_table import _make_block
 from ._types import (
     BlockType, FLAG_COMPRESSED, FLAG_COMPRESS_ALG, FLAG_TIME_ZLIB, FLAG_WAVE_LZ4,
+    FLAG_WAVE_XOR_DELTA, FLAG_WAVE_ZLIB, FLAG_SEEKABLE,
     BLOCK_HEADER_SIZE, SignalEncoding, VcChange,
 )
 from ._exceptions import ZstFormatError
@@ -49,7 +50,9 @@ class VcDataBlock:
         compress: bool = True,
         use_zstd: bool = False,
         compress_time_table: bool = False,
-        compress_waves: bool = False,
+        compress_waves: bool = True,
+        compress_waves_alg: str = "lz4",
+        seekable: bool = False,
     ) -> None:
         self.start_time = start_time
         self.end_time   = start_time
@@ -58,6 +61,8 @@ class VcDataBlock:
         self._use_zstd   = use_zstd
         self._compress_time_table = compress_time_table
         self._compress_waves = compress_waves
+        self._compress_waves_alg = compress_waves_alg
+        self._seekable = seekable
         # {var_id: [(time, value), ...]} — unsorted while accumulating
         self._changes: Dict[int, List[Tuple[int, Any]]] = defaultdict(list)
         # initial values: {var_id: value} set explicitly or from first change
@@ -86,13 +91,20 @@ class VcDataBlock:
 
     def encode_block(self) -> bytes:
         """Serialise to a complete ``BLK_VC_DATA`` block (with header)."""
-        # Sub-section flags are only used in raw (uncompressed) mode.
-        sub_flags = 0
+        # FLAG_WAVE_XOR_DELTA is an encoding flag; always set.
+        # FLAG_TIME_ZLIB / FLAG_WAVE_LZ4 are sub-section compression flags valid
+        # only when the block is not whole-block compressed.
+        sub_flags = FLAG_WAVE_XOR_DELTA
         if not self._compress:
             if self._compress_time_table:
                 sub_flags |= FLAG_TIME_ZLIB
             if self._compress_waves:
-                sub_flags |= FLAG_WAVE_LZ4
+                if self._compress_waves_alg == "zlib":
+                    sub_flags |= FLAG_WAVE_ZLIB
+                else:
+                    sub_flags |= FLAG_WAVE_LZ4
+            if self._seekable:
+                sub_flags |= FLAG_SEEKABLE
         payload = self._encode_payload(sub_flags)
         flags = sub_flags
         if self._compress:
@@ -127,8 +139,9 @@ class VcDataBlock:
                 payload = zstd.ZstdDecompressor().decompress(payload)
             else:
                 payload = zlib.decompress(payload)
-            # After whole-block decompression the sub-section flags do not apply.
-            flags &= ~(FLAG_TIME_ZLIB | FLAG_WAVE_LZ4)
+            # Strip sub-section compression flags after whole-block decompression.
+            # FLAG_WAVE_XOR_DELTA is an encoding flag and survives.
+            flags &= ~(FLAG_COMPRESSED | FLAG_COMPRESS_ALG | FLAG_TIME_ZLIB | FLAG_WAVE_LZ4 | FLAG_WAVE_ZLIB | FLAG_SEEKABLE)
 
         return self._decode_payload(bytes(payload), flags)
 
@@ -137,8 +150,10 @@ class VcDataBlock:
     # ------------------------------------------------------------------
 
     def _encode_payload(self, flags: int = 0) -> bytes:
-        compress_time = bool(flags & FLAG_TIME_ZLIB)
-        compress_waves = bool(flags & FLAG_WAVE_LZ4)
+        compress_time  = bool(flags & FLAG_TIME_ZLIB)
+        compress_waves = bool(flags & (FLAG_WAVE_LZ4 | FLAG_WAVE_ZLIB))
+        waves_alg = "zlib" if (flags & FLAG_WAVE_ZLIB) else "lz4"
+        seekable = bool(flags & FLAG_SEEKABLE)
 
         # Build time table: sorted distinct timestamps
         all_times: List[int] = sorted({
@@ -172,7 +187,10 @@ class VcDataBlock:
             if h in hash_to_offset:
                 var_positions[var_id] = hash_to_offset[h]
             else:
-                stored = _compress_wave_entry(raw) if compress_waves else raw
+                if compress_waves:
+                    stored = _compress_wave_entry(raw, alg=waves_alg)
+                else:
+                    stored = raw
                 hash_to_stored[h] = stored
                 hash_to_offset[h] = wave_offset
                 var_positions[var_id] = wave_offset
@@ -212,6 +230,7 @@ class VcDataBlock:
             out += _encode_value(enc, bw, init_val)
 
         # Position table
+        pos_table_offset = len(out)
         use_4byte = wave_offset < 2**32
         out.append(4 if use_4byte else 8)
         pos_fmt = '<I' if use_4byte else '<Q'
@@ -222,11 +241,23 @@ class VcDataBlock:
         out += encode_uvarint(len(wave_data))
         out += wave_data
 
+        # Seekability footer: u64 giving byte offset of position table within payload
+        if seekable:
+            out += struct.pack('<Q', pos_table_offset)
+
         return bytes(out)
 
     def _decode_payload(self, data: bytes, flags: int = 0) -> List[VcChange]:
         decompress_time = bool(flags & FLAG_TIME_ZLIB)
-        wave_lz4 = bool(flags & FLAG_WAVE_LZ4)
+        wave_lz4        = bool(flags & FLAG_WAVE_LZ4)
+        wave_zlib       = bool(flags & FLAG_WAVE_ZLIB)
+        wave_xor_delta  = bool(flags & FLAG_WAVE_XOR_DELTA)
+        seekable        = bool(flags & FLAG_SEEKABLE)
+
+        # If FLAG_SEEKABLE, the last 8 bytes are the position-table offset.
+        # We strip them before parsing the rest of the payload.
+        if seekable:
+            data = data[:-8]
 
         offset = 0
         start_time, end_time = struct.unpack_from('<QQ', data, offset)
@@ -288,7 +319,10 @@ class VcDataBlock:
                 changes.append(VcChange(var_id=var_id, time=start_time,
                                         value=init_values[var_id]))
                 continue
-            var_changes = _decode_wave(wave_data, pos, enc, bw, times, wave_lz4)
+            var_changes = _decode_wave(wave_data, pos, enc, bw, times,
+                                       wave_lz4=wave_lz4,
+                                       wave_xor_delta=wave_xor_delta,
+                                       wave_zlib=wave_zlib)
             if var_changes:
                 for tidx, val in var_changes:
                     changes.append(VcChange(var_id=var_id, time=times[tidx], value=val))
@@ -372,30 +406,69 @@ def _encode_wave(
 ) -> bytes:
     """Encode the change stream for one variable.
 
-    Format: count:uvarint followed by *count* (time_index_delta, value) entries.
-    Using a count prefix avoids ambiguity when delta==0 is a valid entry header
-    (e.g. SE_REAL / SE_STRING at time_table[0]).
+    SE_2STATE multi-bit signals use XOR-delta + RLE encoding:
+
+        rle_group_count : uvarint
+        for each group:
+            (tidx_delta << 1) | 1 : uvarint   -- time-index delta from prev+1
+            xor_delta             : uvarint   -- prev XOR current value
+            repeat - 1            : uvarint   -- 0 = single; N = N+1 repeats,
+                                                 each advancing by tidx_delta
+
+    All other encoding types use count:uvarint followed by
+    (time_index_delta, value) entries.
     """
     out = bytearray()
-    out += encode_uvarint(len(changes))
     if not changes:
+        out += encode_uvarint(0)
         return bytes(out)
+
     prev_tidx = -1
 
+    # -------------------------------------------------------------------
+    # XOR-delta + RLE encoding for SE_2STATE multi-bit
+    # -------------------------------------------------------------------
+    if enc == SignalEncoding.SE_2STATE and bit_width > 1:
+        prev_val = 0
+        pairs: List[Tuple[int, int]] = []
+        for time, value in changes:
+            tidx   = time_to_idx[time]
+            tdelta = tidx - (prev_tidx + 1)
+            prev_tidx = tidx
+            curr = int(value)
+            pairs.append((tdelta, curr ^ prev_val))
+            prev_val = curr
+        # Collapse into RLE groups
+        groups: List[Tuple[int, int, int]] = []   # (tidx_delta, xor_delta, count)
+        run_td, run_xd = pairs[0]
+        run_count = 1
+        for td, xd in pairs[1:]:
+            if td == run_td and xd == run_xd:
+                run_count += 1
+            else:
+                groups.append((run_td, run_xd, run_count))
+                run_td, run_xd = td, xd
+                run_count = 1
+        groups.append((run_td, run_xd, run_count))
+        out += encode_uvarint(len(groups))
+        for td, xd, count in groups:
+            out += encode_uvarint((td << 1) | 1)
+            out += encode_uvarint(xd)
+            out += encode_uvarint(count - 1)
+        return bytes(out)
+
+    # -------------------------------------------------------------------
+    # All other encoding types
+    # -------------------------------------------------------------------
+    out += encode_uvarint(len(changes))
     for time, value in changes:
         tidx = time_to_idx[time]
         tidx_delta = tidx - (prev_tidx + 1)
         prev_tidx = tidx
 
         if enc == SignalEncoding.SE_2STATE and bit_width == 1:
-            # 1-bit: full encoding: (delta << 2) | (val << 1) | 1
             v = int(value) & 1
             out += encode_uvarint((tidx_delta << 2) | (v << 1) | 1)
-        elif enc == SignalEncoding.SE_2STATE:
-            nbytes = max(1, (bit_width + 7) // 8)
-            val_bytes = int(value).to_bytes(nbytes, 'big')
-            out += encode_uvarint((tidx_delta << 1) | 1)   # all_binary=1
-            out += val_bytes
         elif enc == SignalEncoding.SE_4STATE:
             if bit_width == 1:
                 # 4-state 1-bit: bit0=1 (validity), bits 2:1 = state_code (0-3), bits 3+ = delta
@@ -436,19 +509,23 @@ def _encode_wave(
     return bytes(out)
 
 
-def _compress_wave_entry(raw: bytes) -> bytes:
-    """Return a stored wave entry: LZ4-compressed if smaller, else raw.
+def _compress_wave_entry(raw: bytes, alg: str = "lz4") -> bytes:
+    """Return a stored wave entry: compressed if smaller, else raw.
 
-    With FLAG_WAVE_LZ4 set, each entry in wave_data starts with a flag byte:
+    With FLAG_WAVE_LZ4 or FLAG_WAVE_ZLIB set, each entry in wave_data starts
+    with a flag byte:
       0x00  raw wave bytes follow
-      0x01  orig_size:uvarint + compressed_len:uvarint + lz4_block_bytes follow
+      0x01  orig_size:uvarint + compressed_len:uvarint + compressed bytes follow
     """
-    try:
-        import lz4.block as _lz4
-    except ImportError:
-        return b'\x00' + raw
+    if alg == "zlib":
+        compressed = zlib.compress(raw)
+    else:
+        try:
+            import lz4.block as _lz4
+        except ImportError:
+            return b'\x00' + raw
+        compressed = _lz4.compress(raw, store_size=False)
 
-    compressed = _lz4.compress(raw, store_size=False)
     if len(compressed) + 2 < len(raw):   # +2 accounts for flag + rough overhead
         header = b'\x01' + encode_uvarint(len(raw)) + encode_uvarint(len(compressed))
         return header + compressed
@@ -462,31 +539,59 @@ def _decode_wave(
     bit_width: int,
     times: List[int],
     wave_lz4: bool = False,
+    wave_xor_delta: bool = False,
+    wave_zlib: bool = False,
 ) -> List[Tuple[int, Any]]:
-    """Decode the change stream at *pos* within *wave_data*.
-
-    Reads the count prefix, then decodes exactly *count* entries.
-    When *wave_lz4* is True each entry starts with a flag byte (0=raw, 1=lz4).
-    """
+    """Decode the change stream at *pos* within *wave_data*."""
     offset = pos
-    if wave_lz4:
+    if wave_lz4 or wave_zlib:
         flag = wave_data[offset]; offset += 1
         if flag == 0x01:
             orig_size, offset = decode_uvarint(wave_data, offset)
             compressed_len, offset = decode_uvarint(wave_data, offset)
-            import lz4.block as _lz4
-            raw = _lz4.decompress(
-                wave_data[offset:offset + compressed_len],
-                uncompressed_size=orig_size,
-            )
+            if wave_zlib:
+                raw = zlib.decompress(wave_data[offset:offset + compressed_len])
+            else:
+                import lz4.block as _lz4
+                raw = _lz4.decompress(
+                    wave_data[offset:offset + compressed_len],
+                    uncompressed_size=orig_size,
+                )
             if len(raw) != orig_size:
                 raise ZstFormatError(
-                    f"LZ4 wave decompression: expected {orig_size} bytes, got {len(raw)}"
+                    f"Wave decompression: expected {orig_size} bytes, got {len(raw)}"
                 )
-            return _decode_wave(raw, 0, enc, bit_width, times, wave_lz4=False)
+            return _decode_wave(raw, 0, enc, bit_width, times,
+                                wave_lz4=False, wave_xor_delta=wave_xor_delta,
+                                wave_zlib=False)
         # flag == 0x00: raw wave follows at current offset
+
+    # -------------------------------------------------------------------
+    # XOR-delta + RLE decode (SE_2STATE multi-bit)
+    # -------------------------------------------------------------------
+    if wave_xor_delta and enc == SignalEncoding.SE_2STATE and bit_width > 1:
+        group_count, offset = decode_uvarint(wave_data, offset)
+        result: List[Tuple[int, Any]] = []
+        prev_tidx = -1
+        prev_val  = 0
+        for _ in range(group_count):
+            header,     offset = decode_uvarint(wave_data, offset)
+            tidx_delta         = header >> 1
+            xor_delta,  offset = decode_uvarint(wave_data, offset)
+            repeat_m1,  offset = decode_uvarint(wave_data, offset)
+            count = repeat_m1 + 1
+            for _ in range(count):
+                tidx = prev_tidx + 1 + tidx_delta
+                prev_tidx = tidx
+                prev_val ^= xor_delta
+                result.append((tidx, prev_val))
+        return result
+
+    # -------------------------------------------------------------------
+    # All other encoding types
+    # -------------------------------------------------------------------
     count, offset = decode_uvarint(wave_data, offset)
-    result: List[Tuple[int, Any]] = []
+    result = []
     prev_tidx = -1
 
     for _ in range(count):
@@ -497,7 +602,6 @@ def _decode_wave(
             tidx = prev_tidx + 1 + tidx_delta
             prev_tidx = tidx
             result.append((tidx, value))
-
         elif enc == SignalEncoding.SE_2STATE:
             header, offset = decode_uvarint(wave_data, offset)
             tidx_delta = header >> 1
@@ -507,7 +611,6 @@ def _decode_wave(
             val = int.from_bytes(wave_data[offset:offset + nbytes], 'big')
             offset += nbytes
             result.append((tidx, val))
-
         elif enc == SignalEncoding.SE_4STATE:
             if bit_width == 1:
                 # bit0=1, bits 2:1 = state_code, bits 3+ = tidx_delta

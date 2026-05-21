@@ -26,7 +26,7 @@ from ._txn_data import TxnDataBlock
 # Magic bytes for BLK_FILE_HDR
 TRL_MAGIC = b'TRL\x00\x00\x00\x01\x00'
 TRL_VERSION_MAJOR = 2
-TRL_VERSION_MINOR = 0
+TRL_VERSION_MINOR = 1
 
 # Offset within the file where index_offset u64 lives (when creator/date str IDs = 0):
 #   10 (block header) + 8 (magic) + 1+1+1 (version×2 + timescale) + 8 (timezero)
@@ -71,6 +71,7 @@ class _HierarchyContext:
             name_str_id=writer._strtab.intern(name),
         )
         self._flushed = False
+        self._scope_stack: List[int] = []  # stack of scope_ids
 
     # Forward hierarchy builder methods
     def begin_scope(
@@ -89,9 +90,14 @@ class _HierarchyContext:
             src_file_str_id=src_file_id,
             src_line=src_line,
         )
+        # Assign a new scope_id and push onto the stack
+        self._writer._scope_id_counter += 1
+        self._scope_stack.append(self._writer._scope_id_counter)
 
     def end_scope(self) -> None:
         self._blk.end_scope()
+        if self._scope_stack:
+            self._scope_stack.pop()
 
     def add_var(
         self,
@@ -112,6 +118,9 @@ class _HierarchyContext:
         )
         if sig_type_id in self._writer._sig_types:
             self._writer._var_types[var_id] = self._writer._sig_types[sig_type_id]
+        # Record which scope this var belongs to
+        if self._scope_stack:
+            self._writer._var_scope[var_id] = self._scope_stack[-1]
         if driver_file:
             self._blk.add_attr(
                 self._writer._strtab.intern(WellKnownAttr.DRIVER_FILE),
@@ -167,7 +176,7 @@ class _VcBlockContext:
         self._writer = writer
         # Use var_id → (enc, bw) so VcDataBlock can resolve types for any declared variable.
         # Fall back to _sig_types (keyed by sig_type_id) for compatibility with callers that
-        # pass var_ids equal to their sig_type_ids (legacy behaviour when one type per var).
+        # pass var_ids equal to their sig_type_ids (fallback when one type per var).
         sig_types = dict(writer._sig_types)   # sig_type_id → (enc, bw) as baseline
         sig_types.update(writer._var_types)   # var_id → (enc, bw) overrides / adds
         self._blk = VcDataBlock(
@@ -176,6 +185,8 @@ class _VcBlockContext:
             compress=writer._compress,
             compress_time_table=writer._compress_time_table,
             compress_waves=writer._compress_waves,
+            compress_waves_alg=writer._compress_waves_alg,
+            seekable=writer._seekable,
         )
 
     def add_change(self, var_id: int, time: int, value: Any) -> None:
@@ -197,9 +208,17 @@ class _VcBlockContext:
 class _TxnBlockContext:
     """Returned by :meth:`TrlWriter.begin_txn_block`; acts as a context manager."""
 
-    def __init__(self, writer: 'TrlWriter', start_time: int) -> None:
+    def __init__(
+        self,
+        writer: 'TrlWriter',
+        start_time: int,
+        stream_inst_id: Optional[int] = None,
+    ) -> None:
         self._writer = writer
-        self._blk = TxnDataBlock(start_time=start_time, compress=writer._compress)
+        self._stream_inst_id = stream_inst_id
+        self._blk = TxnDataBlock(start_time=start_time, compress=writer._compress,
+                                  column_layout=writer._column_layout)
+        self._blk._delta_encode = writer._delta_encode_txn
         for txn_type_id, fts in writer._txn_schemas.items():
             self._blk.set_schema(txn_type_id, fts)
 
@@ -264,7 +283,7 @@ class _TxnBlockContext:
             self.write_meta(txn_id, WellKnownAttr.ORIGIN_COMPONENT, origin_component)
 
     def flush(self) -> None:
-        self._writer._flush_txn(self._blk)
+        self._writer._flush_txn(self._blk, stream_inst_id=self._stream_inst_id)
 
     def __enter__(self) -> '_TxnBlockContext':
         return self
@@ -297,12 +316,21 @@ class TrlWriter:
         compress: bool = True,
         compressor: str = "zlib",
         compress_time_table: bool = False,
-        compress_waves: bool = False,
+        compress_waves: bool = True,
+        compress_waves_alg: str = "lz4",
+        seekable: bool = False,
+        scope_grouped: bool = False,
+        column_layout: str = "auto",
     ) -> None:
         self._compress = compress
         self._compressor = compressor
         self._compress_time_table = compress_time_table
         self._compress_waves = compress_waves
+        self._compress_waves_alg = compress_waves_alg
+        self._seekable = seekable
+        self._scope_grouped = scope_grouped
+        self._delta_encode_txn = True
+        self._column_layout = column_layout
         self._strtab = StringTable()
         self._typereg = TypeRegistry()
         self._index = IndexBlock()
@@ -312,6 +340,9 @@ class TrlWriter:
         self._var_types: Dict[int, Tuple[SignalEncoding, int]] = {}  # var_id       → (enc, bw)
         self._txn_schemas: Dict[int, List[FieldType]] = {}
         self._hier_offsets: List[int] = []  # file offsets of written hierarchy blocks
+        # Scope tracking for scope-grouped blocks
+        self._var_scope: Dict[int, int] = {}   # var_id → scope_id
+        self._scope_id_counter: int = 0
 
         if isinstance(path_or_file, (str, bytes)):
             self._file = open(path_or_file, 'wb')
@@ -397,8 +428,12 @@ class TrlWriter:
     def begin_vc_block(self, start_time: int) -> _VcBlockContext:
         return _VcBlockContext(self, start_time)
 
-    def begin_txn_block(self, start_time: int) -> _TxnBlockContext:
-        return _TxnBlockContext(self, start_time)
+    def begin_txn_block(
+        self,
+        start_time: int,
+        stream_inst_id: Optional[int] = None,
+    ) -> _TxnBlockContext:
+        return _TxnBlockContext(self, start_time, stream_inst_id=stream_inst_id)
 
     def write_ext(self, ext_type: bytes, ext_version: int = 0, payload: bytes = b"") -> None:
         """Write an application-specific BLK_EXT block immediately."""
@@ -416,15 +451,54 @@ class TrlWriter:
         self._file.write(encoded)
 
     def _flush_vc(self, blk: VcDataBlock) -> None:
-        offset = self._file.tell()
-        encoded = blk.encode_block()
-        self._index.add_vc_entry(blk.start_time, blk.end_time, offset)
-        self._file.write(encoded)
+        if not self._scope_grouped:
+            offset = self._file.tell()
+            encoded = blk.encode_block()
+            self._index.add_vc_entry(blk.start_time, blk.end_time, offset)
+            self._file.write(encoded)
+            return
 
-    def _flush_txn(self, blk: TxnDataBlock) -> None:
+        # Scope-grouped: split changes by scope, write one VcDataBlock per group.
+        # Each group uses per-signal compression (no whole-block), with seekability.
+        scope_changes: Dict[int, Dict[int, list]] = {}  # scope_id → {var_id: [(t,v)...]}
+        for var_id, changes in blk._changes.items():
+            scope_id = self._var_scope.get(var_id, 0)
+            scope_changes.setdefault(scope_id, {})
+            scope_changes[scope_id][var_id] = changes
+
+        # Also include vars with initial values but no changes
+        for var_id in blk._init_values:
+            scope_id = self._var_scope.get(var_id, 0)
+            scope_changes.setdefault(scope_id, {})
+            if var_id not in scope_changes[scope_id]:
+                scope_changes[scope_id][var_id] = []
+
+        for scope_id in sorted(scope_changes):
+            scope_blk = VcDataBlock(
+                start_time=blk.start_time,
+                sig_types=blk._sig_types,
+                compress=True,
+                compress_waves=False,
+            )
+            for var_id, changes in scope_changes[scope_id].items():
+                if var_id in blk._init_values:
+                    scope_blk.set_initial(var_id, blk._init_values[var_id])
+                for t, v in changes:
+                    scope_blk.add_change(var_id, t, v)
+
+            offset = self._file.tell()
+            encoded = scope_blk.encode_block()
+            self._index.add_vc_entry(scope_blk.start_time, scope_blk.end_time, offset)
+            self._file.write(encoded)
+
+    def _flush_txn(
+        self, blk: TxnDataBlock, stream_inst_id: Optional[int] = None
+    ) -> None:
         offset = self._file.tell()
         encoded = blk.encode_block()
-        self._index.add_txn_entry(blk.start_time, blk.end_time, offset)
+        sid = stream_inst_id if stream_inst_id is not None else 0xFFFFFFFF
+        self._index.add_txn_entry(blk.start_time, blk.end_time, offset,
+                                   stream_inst_id=sid)
         self._file.write(encoded)
 
     # ------------------------------------------------------------------

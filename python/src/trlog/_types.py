@@ -128,6 +128,41 @@ FLAG_COMPRESS_ALG = 0x02  # 0=ZLib, 1=Zstd (when FLAG_COMPRESSED set)
 # BLK_VC_DATA sub-section flags (only meaningful when FLAG_COMPRESSED is NOT set)
 FLAG_TIME_ZLIB    = 0x04  # time table delta bytes are zlib-compressed within payload
 FLAG_WAVE_LZ4     = 0x08  # each wave in wave_data has a per-wave LZ4 compression header
+# BLK_VC_DATA encoding flags (survive whole-block decompression)
+FLAG_WAVE_XOR_DELTA = 0x10  # 2-state multi-bit wave values are XOR-delta + RLE encoded
+FLAG_WAVE_ZLIB    = 0x20  # each wave in wave_data has per-wave zlib compression
+FLAG_SEEKABLE     = 0x40  # last 8 bytes of payload = u64 offset to position table
+
+# BLK_TXN_DATA encoding flags
+FLAG_TXN_DELTA    = 0x04  # txn_id / timestamps are delta-encoded with svarint
+FLAG_TXN_COLUMN   = 0x08  # BLK_TXN_DATA payload uses column-oriented layout
+
+
+class TxnColumnId(enum.IntEnum):
+    """Column identifiers for column-oriented BLK_TXN_DATA layout."""
+    COL_TAG            = 0
+    COL_STREAM_INST_ID = 1
+    COL_TXN_TYPE_ID    = 2
+    COL_TXN_ID_DELTA   = 3
+    COL_TIME_DELTA     = 4
+    COL_DURATION       = 5
+    COL_PARENT         = 6
+    COL_LINK_TYPE      = 7
+    COL_LINK_TGT       = 8
+    COL_LINK_LABEL     = 9
+    COL_META_KEY       = 10
+    COL_META_VAL       = 11
+    COL_ATTR_BASE      = 0x80
+
+
+# Fixed-width field types eligible for column encoding
+_FIXED_WIDTH_FTS = frozenset({
+    FieldType.FT_U8, FieldType.FT_U16, FieldType.FT_U32, FieldType.FT_U64,
+    FieldType.FT_I8, FieldType.FT_I16, FieldType.FT_I32, FieldType.FT_I64,
+    FieldType.FT_F32, FieldType.FT_F64, FieldType.FT_BOOL, FieldType.FT_TIME,
+    FieldType.FT_ENUM,
+})
+
 
 
 # --- Dataclasses ---
@@ -314,3 +349,4 @@ class WellKnownAttr:
     ORIGIN_FILE      = "trlog.origin.file"
     ORIGIN_LINE      = "trlog.origin.line"
     ORIGIN_COMPONENT = "trlog.origin.component"
+

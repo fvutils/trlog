@@ -103,3 +103,82 @@ class TestStreamingTxn:
             assert records[1].txn_type_id == t2
             assert records[0].attrs[0].value == 42
             assert records[1].attrs[0].value == "hello"
+
+
+# ---------------------------------------------------------------------------
+# Phase 8: Column layout integration tests through Writer/Reader
+# ---------------------------------------------------------------------------
+
+
+class TestColumnStreamingTxn:
+
+    def test_column_through_writer_reader(self, tmp_path):
+        """10,000 TR_FULL records through Writer(column) -> Reader roundtrip."""
+        from trlog._types import FieldDef
+        p = tmp_path / "col.trl"
+        with TrlWriter(str(p), compress=True, column_layout="column") as w:
+            fields = [FieldDef(name_str_id=0, field_type=FieldType.FT_U32)]
+            t1 = w.add_txn_schema("ColType", fields)
+            with w.begin_txn_block(0) as txn:
+                for i in range(10_000):
+                    txn.write_full(
+                        stream_inst_id=1, txn_type_id=t1, txn_id=i,
+                        start=i * 10, end=i * 10 + 5, parent=0,
+                        attrs=[TxnAttr(field_idx=0, value=i * 100)],
+                    )
+
+        with TrlReader(str(p)) as r:
+            records = []
+            for blk in r.iter_txn_blocks():
+                records.extend(blk)
+            assert len(records) == 10_000
+            assert all(isinstance(rec, TxnFull) for rec in records)
+            assert records[9999].txn_id == 9999
+            assert records[9999].attrs[0].value == 9999 * 100
+
+    def test_column_cross_block(self, tmp_path):
+        """TR_BEGIN in one column block, TR_END in another."""
+        p = tmp_path / "cross.trl"
+        with TrlWriter(str(p), compress=False, column_layout="column") as w:
+            with w.begin_txn_block(0) as txn:
+                txn.write_begin(stream_inst_id=1, txn_type_id=1, txn_id=99,
+                                start=100, parent=0)
+            with w.begin_txn_block(200) as txn:
+                txn.write_end(txn_id=99, end_time=300)
+
+        with TrlReader(str(p)) as r:
+            records = []
+            for blk in r.iter_txn_blocks():
+                records.extend(blk)
+            assert len(records) == 2
+            assert isinstance(records[0], TxnBegin)
+            assert isinstance(records[1], TxnEnd)
+            assert records[0].txn_id == 99
+            assert records[1].txn_id == 99
+
+    def test_auto_mode_through_writer(self, tmp_path):
+        """Auto mode through Writer roundtrips correctly (layout choice is opaque)."""
+        from trlog._types import FieldDef
+        p = tmp_path / "auto.trl"
+        with TrlWriter(str(p), compress=True, column_layout="auto") as w:
+            fields = [FieldDef(name_str_id=0, field_type=FieldType.FT_U32),
+                      FieldDef(name_str_id=0, field_type=FieldType.FT_U64)]
+            t1 = w.add_txn_schema("AutoType", fields)
+            with w.begin_txn_block(0) as txn:
+                for i in range(1_000):
+                    txn.write_full(
+                        stream_inst_id=1, txn_type_id=t1, txn_id=i,
+                        start=i * 10, end=i * 10 + 5, parent=0,
+                        attrs=[TxnAttr(field_idx=0, value=i),
+                               TxnAttr(field_idx=1, value=i * 10)],
+                    )
+
+        with TrlReader(str(p)) as r:
+            records = []
+            for blk in r.iter_txn_blocks():
+                records.extend(blk)
+            assert len(records) == 1_000
+            for i, rec in enumerate(records):
+                assert rec.txn_id == i
+                assert rec.attrs[0].value == i
+                assert rec.attrs[1].value == i * 10

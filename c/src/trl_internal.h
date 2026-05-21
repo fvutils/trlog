@@ -7,13 +7,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <zlib.h>
+#include <lz4.h>
 
 #include "trl/trl.h"
 
 #define TRL_MAGIC_BYTES "TRL\x00\x00\x00\x01\x00"
 #define TRL_MAGIC_LEN 8
 #define TRL_VERSION_MAJOR 2
-#define TRL_VERSION_MINOR 0
+#define TRL_VERSION_MINOR 1
 #define TRL_BLOCK_HEADER_SIZE 10
 #define TRL_INDEX_OFFSET_FIELD_POS 35
 
@@ -28,6 +29,31 @@
 
 #define TRL_FLAG_COMPRESSED 0x01
 #define TRL_FLAG_COMPRESS_ALG 0x02
+/* BLK_VC_DATA encoding flags (survive whole-block decompression) */
+#define TRL_FLAG_WAVE_XOR_DELTA 0x10
+/* Per-wave zlib compression (sub-section flag, like FLAG_WAVE_LZ4) */
+#define TRL_FLAG_WAVE_ZLIB 0x20
+/* Seekability footer: last 8 bytes of payload = u64 offset to position table */
+#define TRL_FLAG_SEEKABLE 0x40
+/* BLK_TXN_DATA: txn_id / timestamps are delta-encoded with zigzag varint */
+#define TRL_FLAG_TXN_DELTA 0x04
+/* BLK_TXN_DATA: payload uses column-oriented layout */
+#define TRL_FLAG_TXN_COLUMN 0x08
+
+/* Column IDs for column-oriented BLK_TXN_DATA */
+#define TRL_COL_TAG            0
+#define TRL_COL_STREAM_INST_ID 1
+#define TRL_COL_TXN_TYPE_ID    2
+#define TRL_COL_TXN_ID_DELTA   3
+#define TRL_COL_TIME_DELTA     4
+#define TRL_COL_DURATION       5
+#define TRL_COL_PARENT         6
+#define TRL_COL_LINK_TYPE      7
+#define TRL_COL_LINK_TGT       8
+#define TRL_COL_LINK_LABEL     9
+#define TRL_COL_META_KEY       10
+#define TRL_COL_META_VAL       11
+#define TRL_COL_ATTR_BASE      0x80
 
 #define TRL_TYPE_TAG_SIGNAL 0x01
 #define TRL_TYPE_TAG_TXN_SCHEMA 0x02
@@ -342,6 +368,23 @@ static inline trl_status_t trl_zlib_compress_buf(const uint8_t *src, size_t len,
         return TRL_ERR_COMPRESS;
     }
     out->size = (size_t)dest_len;
+    return TRL_OK;
+}
+
+static inline trl_status_t trl_lz4_compress_buf(const uint8_t *src, size_t len, trl_buf_t *out) {
+    int max_dst = LZ4_compressBound((int)len);
+    trl_status_t st = trl_buf_reserve(out, (size_t)max_dst);
+    if (st != TRL_OK) return st;
+    int compressed = LZ4_compress_default((const char *)src, (char *)out->data, (int)len, max_dst);
+    if (compressed <= 0) return TRL_ERR_COMPRESS;
+    out->size = (size_t)compressed;
+    return TRL_OK;
+}
+
+static inline trl_status_t trl_lz4_decompress_buf(const uint8_t *src, size_t src_len,
+                                                   uint8_t *dst, size_t dst_len) {
+    int rc = LZ4_decompress_safe((const char *)src, (char *)dst, (int)src_len, (int)dst_len);
+    if (rc < 0 || (size_t)rc != dst_len) return TRL_ERR_COMPRESS;
     return TRL_OK;
 }
 

@@ -13,7 +13,7 @@ from ._string_table import StringTable
 from ._type_registry import TypeRegistry
 from ._types import (
     BlockType, SignalEncoding, BLOCK_HEADER_SIZE, FLAG_COMPRESSED, FLAG_COMPRESS_ALG,
-    VcChange,
+    VcChange, HStream,
 )
 from ._ext import ExtBlock
 from ._vc_data import VcDataBlock
@@ -96,14 +96,59 @@ class TrlReader:
                 blk = VcDataBlock(start_time=0, sig_types=sig_types)
                 yield blk.read_block(payload, flags=flags)
 
-    def iter_txn_blocks(self) -> Iterator[list]:
-        """Yield lists of transaction records from each BLK_TXN_DATA block."""
+    def iter_txn_blocks(
+        self, stream_inst_id: Optional[int] = None
+    ) -> Iterator[list]:
+        """Yield lists of transaction records from each BLK_TXN_DATA block.
+
+        Parameters
+        ----------
+        stream_inst_id:
+            When given, only blocks (or records within blocks) belonging to
+            this stream are returned.  If the per-stream index is available
+            the reader seeks directly to the relevant blocks; otherwise it
+            falls back to decoding every block and filtering per-record.
+        """
         schemas = self._build_txn_schemas()
+
+        # Fast path: per-stream index available and a specific stream requested
+        if (stream_inst_id is not None
+                and self._index is not None
+                and any(sid != 0xFFFFFFFF
+                        for _, _, _, sid in self._index._txn_entries)):
+            offsets = self._index.find_txn_blocks_for_stream(stream_inst_id)
+            for off in offsets:
+                self._file.seek(off)
+                blk_type, flags, payload, _ = self._read_one_block()
+                if blk_type != BlockType.BLK_TXN_DATA:
+                    continue
+                blk = TxnDataBlock(compress=False)
+                records = blk.read_block(payload, flags=flags, schemas=schemas)
+                # The block *should* be single-stream, but if it was written
+                # as mixed we still need to filter at record level.
+                filtered = [
+                    r for r in records
+                    if not hasattr(r, "stream_inst_id")
+                    or r.stream_inst_id == stream_inst_id
+                ]
+                if filtered:
+                    yield filtered
+            return
+
+        # Slow path: linear scan
         self._file.seek(0)
         for block_type, flags, payload, _offset in self._iter_raw_blocks():
             if block_type == BlockType.BLK_TXN_DATA:
                 blk = TxnDataBlock(compress=False)
-                yield blk.read_block(payload, flags=flags, schemas=schemas)
+                records = blk.read_block(payload, flags=flags, schemas=schemas)
+                if stream_inst_id is not None:
+                    records = [
+                        r for r in records
+                        if not hasattr(r, "stream_inst_id")
+                        or r.stream_inst_id == stream_inst_id
+                    ]
+                if records:
+                    yield records
 
     def iter_ext_blocks(self, ext_type: Optional[bytes] = None) -> Iterator[ExtBlock]:
         """Yield :class:`ExtBlock` instances from BLK_EXT blocks.
@@ -173,12 +218,9 @@ class TrlReader:
         end: Optional[int] = None,
     ) -> list:
         """Return all transaction records for *stream_inst_id* in [start, end]."""
-        from ._types import TxnFull, TxnBegin
         records = []
-        for block_recs in self.iter_txn_blocks():
+        for block_recs in self.iter_txn_blocks(stream_inst_id=stream_inst_id):
             for r in block_recs:
-                if not hasattr(r, 'stream_inst_id') or r.stream_inst_id != stream_inst_id:
-                    continue
                 t = getattr(r, 'start_time', None)
                 if t is None:
                     continue
@@ -188,6 +230,35 @@ class TrlReader:
                     continue
                 records.append(r)
         return records
+
+    def find_streams(self, kind: Optional[str] = None) -> Dict[int, HStream]:
+        """Return stream_inst_id -> HStream for streams matching *kind*.
+
+        When *kind* is None, returns every stream across all hierarchies.
+        When *kind* is given, only streams whose stream_type_id resolves
+        (through the type registry and string table) to a
+        :class: with a matching kind_str_id string are
+        included.
+        """
+        result: Dict[int, HStream] = {}
+        # Build stream_type_id -> kind string lookup
+        kind_by_type: Dict[int, str] = {}
+        for sid, decl in self._typereg._stream_decls.items():
+            if decl.kind_str_id:
+                try:
+                    resolved = self._strtab.lookup(decl.kind_str_id)
+                    kind_by_type[sid] = resolved
+                except KeyError:
+                    pass
+        for hier in self._hierarchies.values():
+            for inst_id, hstream in hier.streams.items():
+                if kind is None:
+                    result[inst_id] = hstream
+                else:
+                    stream_kind = kind_by_type.get(hstream.stream_type_id, "")
+                    if stream_kind == kind:
+                        result[inst_id] = hstream
+        return result
 
     # ------------------------------------------------------------------
     # Internal scan
@@ -270,8 +341,15 @@ class TrlReader:
     def _build_sig_types(self) -> Dict[int, tuple]:
         """Build var_id → (SignalEncoding, bit_width) from type registry."""
         result = {}
+        # Baseline: sig_type_id → (enc, bw) so VcDataBlock can fall back to it
         for sig_id, entry in self._typereg._signal_types.items():
             result[sig_id] = (entry.encoding, entry.bit_width)
+        # Overlay: var_id → (enc, bw) resolved via hierarchy's var→sig_type mapping
+        for hier in self._hierarchies.values():
+            for var_id, hvar in hier.vars.items():
+                sig = self._typereg._signal_types.get(hvar.sig_type_id)
+                if sig is not None:
+                    result[var_id] = (sig.encoding, sig.bit_width)
         return result
 
     def _build_txn_schemas(self) -> Dict[int, list]:

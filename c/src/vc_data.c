@@ -224,9 +224,83 @@ static trl_status_t trl_vc_encode_init_value(trl_buf_t *payload, const trl_signa
     }
 }
 
+/* Extract the value of change *chg* as a u64 (big-endian, up to 64 bits). */
+static uint64_t trl_chg_to_u64(const trl_vc_change_t *chg, uint32_t bw) {
+    if (chg->kind == TRL_VC_VALUE_U64) return chg->value.u64;
+    size_t nbytes = (size_t)((bw + 7) / 8); if (!nbytes) nbytes = 1;
+    uint64_t v = 0;
+    const uint8_t *d = chg->value.bytes.data;
+    size_t len = chg->value.bytes.len;
+    for (size_t k = 0; k < len && k < 8; ++k) v = (v << 8) | d[k];
+    (void)nbytes;
+    return v;
+}
+
+/*
+ * Encode the change stream for one 2-state multi-bit signal using
+ * XOR-delta + RLE:
+ *
+ *   rle_group_count : uvarint
+ *   for each group:
+ *     (tidx_delta << 1) | 1 : uvarint   -- time-index delta from prev+1
+ *     xor_delta             : uvarint   -- prev XOR current value
+ *     repeat - 1            : uvarint   -- 0=single; N=N+1 repeats, each
+ *                                          advancing by tidx_delta
+ */
+static trl_status_t trl_vc_encode_wave_xor_rle(trl_buf_t *dst,
+        const trl_vc_var_changes_t *var, uint32_t bw,
+        const uint64_t *times, size_t time_count) {
+    if (!var->count) return trl_buf_append_uvarint(dst, 0);
+
+    /* Pass 1: compute (tidx_delta, xor_delta) pairs */
+    uint64_t *tdeltas = (uint64_t *)malloc(var->count * sizeof(uint64_t));
+    uint64_t *xdeltas = (uint64_t *)malloc(var->count * sizeof(uint64_t));
+    if (!tdeltas || !xdeltas) { free(tdeltas); free(xdeltas); return TRL_ERR_OOM; }
+
+    int64_t  prev_tidx = -1;
+    uint64_t prev_val  = 0;
+    for (size_t i = 0; i < var->count; ++i) {
+        const trl_vc_change_t *chg = &var->items[i];
+        size_t tidx = trl_time_index(times, time_count, chg->time);
+        tdeltas[i] = (uint64_t)((int64_t)tidx - (prev_tidx + 1));
+        prev_tidx  = (int64_t)tidx;
+        uint64_t curr = trl_chg_to_u64(chg, bw);
+        xdeltas[i] = curr ^ prev_val;
+        prev_val   = curr;
+    }
+
+    /* Pass 2: RLE — group consecutive identical (tdelta, xdelta) pairs */
+    size_t group_count = 0;
+    for (size_t i = 0; i < var->count; ) {
+        size_t j = i + 1;
+        while (j < var->count && tdeltas[j] == tdeltas[i] && xdeltas[j] == xdeltas[i]) ++j;
+        group_count++;
+        i = j;
+    }
+
+    /* Pass 3: emit */
+    trl_status_t st = trl_buf_append_uvarint(dst, group_count);
+    for (size_t i = 0; st == TRL_OK && i < var->count; ) {
+        size_t j = i + 1;
+        while (j < var->count && tdeltas[j] == tdeltas[i] && xdeltas[j] == xdeltas[i]) ++j;
+        size_t count = j - i;
+        st = trl_buf_append_uvarint(dst, (tdeltas[i] << 1) | 1u);
+        if (st == TRL_OK) st = trl_buf_append_uvarint(dst, xdeltas[i]);
+        if (st == TRL_OK) st = trl_buf_append_uvarint(dst, (uint64_t)(count - 1));
+        i = j;
+    }
+    free(tdeltas); free(xdeltas);
+    return st;
+}
+
 static trl_status_t trl_vc_encode_wave(trl_buf_t *dst, const trl_vc_var_changes_t *var, const trl_signal_type_entry_t *sig, const uint64_t *times, size_t time_count) {
     uint8_t enc = sig ? sig->encoding : TRL_SE_2STATE;
     uint32_t bw = sig ? sig->bit_width : 1;
+
+    /* 2-state multi-bit: XOR-delta + RLE */
+    if (enc == TRL_SE_2STATE && bw > 1)
+        return trl_vc_encode_wave_xor_rle(dst, var, bw, times, time_count);
+
     trl_status_t st = trl_buf_append_uvarint(dst, var->count);
     int64_t prev_tidx = -1;
     for (size_t i = 0; st == TRL_OK && i < var->count; ++i) {
@@ -237,17 +311,6 @@ static trl_status_t trl_vc_encode_wave(trl_buf_t *dst, const trl_vc_var_changes_
         if (enc == TRL_SE_2STATE && bw == 1) {
             uint64_t v = (chg->kind == TRL_VC_VALUE_U64) ? (chg->value.u64 & 1u) : (chg->value.bytes.len ? (chg->value.bytes.data[chg->value.bytes.len - 1] & 1u) : 0u);
             st = trl_buf_append_uvarint(dst, (delta << 2) | (v << 1) | 1u);
-        } else if (enc == TRL_SE_2STATE) {
-            size_t nbytes = (size_t)((bw + 7) / 8); if (!nbytes) nbytes = 1;
-            st = trl_buf_append_uvarint(dst, (delta << 1) | 1u);
-            if (st == TRL_OK) {
-                if (chg->kind == TRL_VC_VALUE_BYTES) st = trl_append_exact_bytes(dst, chg->value.bytes.data, chg->value.bytes.len, nbytes);
-                else {
-                    uint8_t tmp[8] = {0};
-                    for (size_t j = 0; j < nbytes && j < sizeof(tmp); ++j) tmp[nbytes - 1 - j] = (uint8_t)(chg->value.u64 >> (8 * j));
-                    st = trl_append_exact_bytes(dst, tmp, nbytes, nbytes);
-                }
-            }
         } else if (enc == TRL_SE_4STATE && bw == 1) {
             uint64_t state = (chg->kind == TRL_VC_VALUE_BYTES && chg->value.bytes.len) ? (chg->value.bytes.data[chg->value.bytes.len - 1] & 0x3u) : (chg->value.u64 & 0x3u);
             st = trl_buf_append_uvarint(dst, (delta << 3) | (state << 1) | 1u);
@@ -353,17 +416,20 @@ trl_status_t trl_vc_block_encode(const trl_vc_block_t *blk, const uint32_t *var_
         trl_buf_free(&payload);
         return st;
     }
+    /* TRL_FLAG_WAVE_XOR_DELTA is always set: the encoder always uses XOR-delta+RLE. */
+    uint8_t block_flags = TRL_FLAG_WAVE_XOR_DELTA;
+
     if (compress == TRL_COMPRESS_ZLIB && payload.size) {
         trl_buf_t comp;
         trl_buf_init(&comp);
         st = trl_zlib_compress_buf(payload.data, payload.size, &comp);
         trl_buf_free(&payload);
         if (st != TRL_OK) { trl_buf_free(&comp); return st; }
-        st = trl_make_block(TRL_BLK_VC_DATA, TRL_FLAG_COMPRESSED, comp.data, comp.size, out);
+        st = trl_make_block(TRL_BLK_VC_DATA, (uint8_t)(block_flags | TRL_FLAG_COMPRESSED), comp.data, comp.size, out);
         trl_buf_free(&comp);
         return st;
     }
-    st = trl_make_block(TRL_BLK_VC_DATA, 0, payload.data, payload.size, out);
+    st = trl_make_block(TRL_BLK_VC_DATA, block_flags, payload.data, payload.size, out);
     trl_buf_free(&payload);
     return st;
 }
@@ -471,9 +537,41 @@ trl_status_t trl_vc_iter_payload(const uint8_t *payload, size_t payload_len, uin
 
     for (uint64_t vi = 0; st == TRL_OK && vi < var_count; ++vi) {
         size_t p = (size_t)positions[vi];
+        if (p >= wave_size) { continue; }
+
+        /* --- 2-state multi-bit: XOR-delta + RLE groups --- */
+        if (encs[vi] == TRL_SE_2STATE && bws[vi] > 1) {
+            uint64_t group_count = 0;
+            st = trl_decode_uvarint(wave, wave_size, &p, &group_count);
+            if (st != TRL_OK) continue;
+            int64_t  prev_tidx = -1;
+            uint64_t prev_val  = 0;
+            size_t nbytes = (size_t)((bws[vi] + 7) / 8);
+            if (!nbytes) nbytes = 1;
+            if (nbytes > 8) nbytes = 8;
+            uint8_t val_buf[8];
+            for (uint64_t gi = 0; st == TRL_OK && gi < group_count; ++gi) {
+                uint64_t hdr = 0, xor_delta = 0, repeat_m1 = 0;
+                st = trl_decode_uvarint(wave, wave_size, &p, &hdr);   if (st != TRL_OK) break;
+                st = trl_decode_uvarint(wave, wave_size, &p, &xor_delta); if (st != TRL_OK) break;
+                st = trl_decode_uvarint(wave, wave_size, &p, &repeat_m1); if (st != TRL_OK) break;
+                uint64_t td = hdr >> 1;
+                for (uint64_t rep = 0; rep <= repeat_m1; ++rep) {
+                    uint64_t tidx = (uint64_t)(prev_tidx + 1) + td;
+                    if (tidx >= count) { st = TRL_ERR_CORRUPT; break; }
+                    prev_tidx = (int64_t)tidx;
+                    prev_val ^= xor_delta;
+                    for (size_t k = 0; k < nbytes; ++k)
+                        val_buf[nbytes - 1 - k] = (uint8_t)(prev_val >> (8 * k));
+                    cb(var_ids[vi], times[tidx], val_buf, (uint32_t)nbytes, user);
+                }
+            }
+            continue;  /* done with this variable */
+        }
+
+        /* --- All other encoding types --- */
         uint64_t rec_count = 0;
         int64_t prev_tidx = -1;
-        if (p >= wave_size) { continue; }
         st = trl_decode_uvarint(wave, wave_size, &p, &rec_count);
         for (uint64_t ri = 0; st == TRL_OK && ri < rec_count; ++ri) {
             uint64_t header = 0, delta = 0, tidx = 0;
@@ -489,13 +587,6 @@ trl_status_t trl_vc_iter_payload(const uint8_t *payload, size_t payload_len, uin
                 prev_tidx = (int64_t)tidx;
                 val = small; vlen = 1;
             } else if (encs[vi] == TRL_SE_2STATE) {
-                size_t nbytes = (size_t)((bws[vi] + 7) / 8); if (!nbytes) nbytes = 1;
-                st = trl_decode_uvarint(wave, wave_size, &p, &header);
-                if (st != TRL_OK || p + nbytes > wave_size) break;
-                delta = header >> 1;
-                tidx = (uint64_t)(prev_tidx + 1) + delta;
-                prev_tidx = (int64_t)tidx;
-                val = wave + p; vlen = (uint32_t)nbytes; p += nbytes;
             } else if (encs[vi] == TRL_SE_4STATE && bws[vi] == 1) {
                 st = trl_decode_uvarint(wave, wave_size, &p, &header);
                 if (st != TRL_OK) break;

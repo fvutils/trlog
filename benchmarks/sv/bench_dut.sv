@@ -13,9 +13,10 @@
 
 `default_nettype none
 
-module bench_dut;
-
-    parameter int SIGNAL_MIX = 0;
+// SIGNAL_MIX in the port-list so -G (Verilator/VCS parameter override) works.
+module bench_dut #(
+    parameter int SIGNAL_MIX = 0
+);
 
     // --- signals -------------------------------------------------------
     logic        clk      = 1'b0;
@@ -37,8 +38,15 @@ module bench_dut;
         if ($value$plusargs("steps=%d", step_val))
             steps = step_val;
 
+`ifdef DUMP_FSDB
+        // Verdi FSDB dump (VCS + -debug_access required).
+        // Verdi always appends ".fsdb"; dumping to "trace" produces "trace.fsdb".
+        $fsdbDumpfile("trace");
+        $fsdbDumpvars(0, bench_dut);
+`else
         $dumpfile("trace.out");
         $dumpvars(0, bench_dut);
+`endif
 
         for (step = 0; step < steps; step++) begin
             @(posedge clk);

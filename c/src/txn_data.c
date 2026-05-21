@@ -98,20 +98,27 @@ trl_status_t trl_txn_block_encode(const trl_txn_block_t *blk, trl_compress_t com
     st = trl_buf_append_le64(&payload, blk->start_time);
     if (st == TRL_OK) st = trl_buf_append_le64(&payload, blk->end_time);
     if (st == TRL_OK) st = trl_buf_append_uvarint(&payload, blk->count);
+
+    /* Delta-encoding state */
+    int64_t prev_txn_id = 0;
+    int64_t prev_time   = (int64_t)blk->start_time;
+
     for (size_t i = 0; st == TRL_OK && i < blk->count; ++i) {
         const trl_txn_full_rec_t *rec = &blk->records[i];
         st = trl_buf_append_u8(&payload, TRL_TXN_FULL);
         if (st == TRL_OK) st = trl_buf_append_uvarint(&payload, rec->stream_inst_id);
         if (st == TRL_OK) st = trl_buf_append_uvarint(&payload, rec->txn_type_id);
-        if (st == TRL_OK) st = trl_buf_append_uvarint(&payload, rec->txn_id);
-        if (st == TRL_OK) st = trl_buf_append_uvarint(&payload, rec->start);
-        if (st == TRL_OK) st = trl_buf_append_uvarint(&payload, rec->end);
+        if (st == TRL_OK) st = trl_buf_append_svarint(&payload, (int64_t)rec->txn_id - prev_txn_id);
+        if (st == TRL_OK) st = trl_buf_append_svarint(&payload, (int64_t)rec->start - prev_time);
+        if (st == TRL_OK) st = trl_buf_append_uvarint(&payload, rec->end - rec->start); /* duration */
         if (st == TRL_OK) st = trl_buf_append_uvarint(&payload, rec->parent);
         if (st == TRL_OK) st = trl_buf_append_uvarint(&payload, rec->attr_count);
         for (uint32_t ai = 0; st == TRL_OK && ai < rec->attr_count; ++ai) {
             st = trl_buf_append_u8(&payload, (uint8_t)rec->attrs[ai].field_type);
             if (st == TRL_OK) st = trl_encode_attr_value(&payload, &rec->attrs[ai]);
         }
+        prev_txn_id = (int64_t)rec->txn_id;
+        prev_time   = (int64_t)rec->end;
     }
     if (st != TRL_OK) {
         trl_buf_free(&payload);
@@ -126,11 +133,11 @@ trl_status_t trl_txn_block_encode(const trl_txn_block_t *blk, trl_compress_t com
             trl_buf_free(&comp);
             return st;
         }
-        st = trl_make_block(TRL_BLK_TXN_DATA, TRL_FLAG_COMPRESSED, comp.data, comp.size, out);
+        st = trl_make_block(TRL_BLK_TXN_DATA, (uint8_t)(TRL_FLAG_COMPRESSED | TRL_FLAG_TXN_DELTA), comp.data, comp.size, out);
         trl_buf_free(&comp);
         return st;
     }
-    st = trl_make_block(TRL_BLK_TXN_DATA, 0, payload.data, payload.size, out);
+    st = trl_make_block(TRL_BLK_TXN_DATA, TRL_FLAG_TXN_DELTA, payload.data, payload.size, out);
     trl_buf_free(&payload);
     return st;
 }
