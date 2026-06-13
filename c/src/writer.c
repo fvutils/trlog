@@ -48,6 +48,7 @@ static trl_status_t trl_writer_flush_string_table(trl_writer_t *w) {
     trl_buf_t block; trl_buf_init(&block);
     trl_status_t st = trl_string_table_encode_block(&w->strtab, w->compress, &block);
     if (st != TRL_OK) return st;
+    w->index.strtab_offset = (uint64_t)ftell(w->fp);   /* for the index 0x01 section */
     return trl_writer_write_buf(w, &block);
 }
 
@@ -55,6 +56,7 @@ static trl_status_t trl_writer_flush_type_registry(trl_writer_t *w) {
     trl_buf_t block; trl_buf_init(&block);
     trl_status_t st = trl_type_registry_encode_block(&w->typereg, w->compress, &block);
     if (st != TRL_OK) return st;
+    w->index.typereg_offset = (uint64_t)ftell(w->fp);
     return trl_writer_write_buf(w, &block);
 }
 
@@ -119,6 +121,7 @@ uint32_t trl_hier_add_var(trl_writer_t *w, uint32_t name_id, uint32_t sig_type_i
 trl_status_t trl_flush_hierarchy(trl_writer_t *w) {
     trl_buf_t block; trl_buf_init(&block);
     trl_status_t st = trl_hierarchy_encode_block(&w->hierarchy, w->compress, &block);
+    if (st == TRL_OK) st = trl_index_add_hier_offset(&w->index, (uint64_t)ftell(w->fp));
     if (st == TRL_OK) st = trl_writer_write_buf(w, &block);
     else trl_buf_free(&block);
     w->hierarchy_active = false;
@@ -149,7 +152,16 @@ trl_status_t trl_vc_change_real(trl_writer_t *w, uint32_t var_id, uint64_t time,
 trl_status_t trl_vc_flush(trl_writer_t *w) {
     trl_buf_t block; trl_buf_init(&block);
     long off = ftell(w->fp);
-    trl_status_t st = trl_vc_block_encode(&w->vc, w->global_var_sig_type_ids, w->global_var_cap, &w->typereg, w->compress, &block);
+    /* Dispatch the encode through the resolved value-change codec. The default
+     * path (design §4.3) is the registered core codec whose wrapper calls the
+     * same trl_vc_block_encode, so the bytes are identical; a codec selected via
+     * trl_writer_set_vc_codec (Phase 3.5) gets its threaded per-stream state. */
+    const trl_vc_codec_t *codec = w->vc_codec ? w->vc_codec
+        : trl_lookup_vc_codec(TRL_CODEC_CORE_VALUECHANGE);
+    void *self = w->vc_codec ? w->vc_codec_self : NULL;
+    trl_store store = { .writer = w, .reader = NULL };
+    trl_blkout out = { .buf = &block };
+    trl_status_t st = codec->encode_block(self, &store, &out) == 0 ? TRL_OK : TRL_ERR_IO;
     if (st == TRL_OK) st = trl_index_add_vc(&w->index, w->vc.start_time, w->vc.end_time, (uint64_t)off);
     if (st == TRL_OK) st = trl_writer_write_buf(w, &block);
     else trl_buf_free(&block);
@@ -169,7 +181,11 @@ trl_status_t trl_txn_full(trl_writer_t *w, uint32_t stream_inst_id, uint32_t txn
 trl_status_t trl_txn_end_block(trl_writer_t *w) {
     trl_buf_t block; trl_buf_init(&block);
     long off = ftell(w->fp);
-    trl_status_t st = trl_txn_block_encode(&w->txn, w->compress, &block);
+    /* Dispatch through the registered core record codec (byte-identical). */
+    const trl_txn_codec_t *codec = trl_lookup_txn_codec(TRL_CODEC_CORE_RECORD);
+    trl_store store = { .writer = w, .reader = NULL };
+    trl_blkout out = { .buf = &block };
+    trl_status_t st = codec->encode_block(NULL, &store, &out) == 0 ? TRL_OK : TRL_ERR_IO;
     if (st == TRL_OK) st = trl_index_add_txn(&w->index, w->txn.start_time, w->txn.end_time, (uint64_t)off);
     if (st == TRL_OK) st = trl_writer_write_buf(w, &block);
     else trl_buf_free(&block);
@@ -184,6 +200,20 @@ trl_status_t trl_writer_close(trl_writer_t *w) {
         if (w->hierarchy_active && st == TRL_OK) st = trl_flush_hierarchy(w);
         if (w->vc_active && st == TRL_OK) st = trl_vc_flush(w);
         if (w->txn_active && st == TRL_OK) st = trl_txn_end_block(w);
+        /* Codec trace-finalize lifecycle (design §4.7): after the last
+         * encode_block, before the index/footer. Built-ins are no-ops. */
+        {
+            trl_store store = { .writer = w, .reader = NULL };
+            /* Finalize/close the resolved VC codec (selected one if set, else
+             * core) with its threaded per-stream state; then the core TXN. */
+            const trl_vc_codec_t *vc = w->vc_codec ? w->vc_codec
+                : trl_lookup_vc_codec(TRL_CODEC_CORE_VALUECHANGE);
+            void *vc_self = w->vc_codec ? w->vc_codec_self : NULL;
+            const trl_txn_codec_t *tx = trl_lookup_txn_codec(TRL_CODEC_CORE_RECORD);
+            if (vc) { vc->finalize(vc_self, &store); vc->close(vc_self); }
+            if (tx) { tx->finalize(NULL, &store); tx->close(NULL); }
+            w->vc_codec_self = NULL;   /* closed; don't double-close */
+        }
         if (st == TRL_OK) st = trl_writer_flush_string_table(w);
         if (st == TRL_OK) st = trl_writer_flush_type_registry(w);
         if (st == TRL_OK) {

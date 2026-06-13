@@ -11,6 +11,14 @@ zuspec-trace
 
 .. toctree::
    :maxdepth: 2
+   :caption: Format & Codecs
+
+   guide/format
+   codec-registry
+   guide/writing-a-codec
+
+.. toctree::
+   :maxdepth: 2
    :caption: API Reference
 
    api/writer

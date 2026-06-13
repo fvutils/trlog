@@ -85,9 +85,13 @@ trl_status_t trl_iter_vc(trl_reader_t *r, trl_vc_cb cb, void *user) {
         if (payload_len && !payload) return TRL_ERR_OOM;
         if (payload_len && fread(payload, 1, payload_len, r->fp) != payload_len) { free(payload); return TRL_ERR_IO; }
         if (type == TRL_BLK_VC_DATA) {
-            st = trl_vc_iter_payload(payload, payload_len, flags, r->var_sig_type_ids, r->var_sig_cap, &r->typereg, cb, user);
+            /* Dispatch decode through the registered core value-change codec
+             * (design §4.3); the wrapper calls the same trl_vc_iter_payload. */
+            const trl_vc_codec_t *codec = trl_lookup_vc_codec(TRL_CODEC_CORE_VALUECHANGE);
+            trl_store store = { .writer = NULL, .reader = r };
+            int rc = codec->decode_block(NULL, &store, payload, payload_len, flags, cb, user);
             free(payload);
-            if (st != TRL_OK) return st;
+            if (rc != 0) return (trl_status_t)rc;
         } else {
             free(payload);
         }

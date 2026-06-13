@@ -114,7 +114,10 @@ trl_status_t trl_txn_block_encode(const trl_txn_block_t *blk, trl_compress_t com
         if (st == TRL_OK) st = trl_buf_append_uvarint(&payload, rec->parent);
         if (st == TRL_OK) st = trl_buf_append_uvarint(&payload, rec->attr_count);
         for (uint32_t ai = 0; st == TRL_OK && ai < rec->attr_count; ++ai) {
-            st = trl_buf_append_u8(&payload, (uint8_t)rec->attrs[ai].field_type);
+            /* Match the Python reference row layout: the field *index* (resolved
+             * against the schema by the reader), then the value encoded per the
+             * field's type. (Not an inline field_type byte.) */
+            st = trl_buf_append_uvarint(&payload, rec->attrs[ai].field_idx);
             if (st == TRL_OK) st = trl_encode_attr_value(&payload, &rec->attrs[ai]);
         }
         prev_txn_id = (int64_t)rec->txn_id;

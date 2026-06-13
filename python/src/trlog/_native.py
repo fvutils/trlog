@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Iterable, Optional
 
-from ._types import FieldType, HierKind, Radix, ScopeType, TxnAttr, VarDir
+from ._types import FieldType, HierKind, Radix, ScopeType, SignalEncoding, TxnAttr, VarDir
 from ._writer import TrlWriter as _PyWriter
 from ._reader import TrlReader as _PyReader
 
@@ -119,7 +119,11 @@ class _HierarchyContext:
                 self._writer._handle,
                 int(scope_type),
                 self._writer.intern(name),
-                self._writer.intern(component) if component else 0,
+                # The pure-Python reference interns the component string
+                # unconditionally (even when empty → a real id), unlike
+                # src_file. Mirror that so the string-table ids — and every
+                # block that references them — match byte-for-byte.
+                self._writer.intern(component),
                 self._writer.intern(src_file) if src_file else 0,
                 src_line,
             )
@@ -140,6 +144,9 @@ class _HierarchyContext:
                 src_line,
             )
         )
+        enc = self._writer._sig_types.get(sig_type_id)
+        if enc is not None:
+            self._writer._var_enc[var_id] = enc
         if driver_file:
             self.add_attr("trlog.driver.file", driver_file)
             self.add_attr("trlog.driver.line", str(driver_line))
@@ -163,6 +170,36 @@ class _VcContext:
         writer._check(_LIB.trl_vc_begin(writer._handle, start_time))
 
     def add_change(self, var_id: int, time: int, value) -> None:
+        # 4-state signals carry symbolic values ("X"/"Z"); the pure reference
+        # stores the wire code (0..3). For 1-bit vars that code goes through the
+        # u64 path, so map it here to match the reference byte-for-byte.
+        enc = self._writer._var_enc.get(var_id)
+        if enc is not None and enc[0] == int(SignalEncoding.SE_4STATE) and enc[1] == 1:
+            from ._vc_data import _4state_code
+            self._writer._check(_LIB.trl_vc_change_u64(
+                self._writer._handle, var_id, time, _4state_code(value)))
+            return
+        if enc is not None and enc[0] == int(SignalEncoding.SE_9STATE):
+            # 9-state encodes binary integers raw (is_binary=1) and symbolic
+            # values ("X"/"Z"/…) as 4-bit nibble codes (is_binary=0) — see
+            # _vc_data._pack_9state. Binary ints take the u64 path (the C encoder
+            # marks any non-BYTES change is_binary). Symbols go through BYTES
+            # carrying the packed nibbles; the C encoder treats a BYTES change as
+            # non-binary only when its length exceeds the raw width, so pad the
+            # packed bytes past that width for narrow signals (e.g. 1-bit).
+            bw = enc[1]
+            if isinstance(value, int) and value >= 0:
+                self._writer._check(_LIB.trl_vc_change_u64(
+                    self._writer._handle, var_id, time, value))
+            else:
+                from ._vc_data import _pack_9state
+                packed = _pack_9state(value, bw)
+                binary_bytes = max(1, (bw + 7) // 8)
+                if len(packed) <= binary_bytes:
+                    packed = b"\x00" * (binary_bytes + 1 - len(packed)) + packed
+                self._writer._check(_LIB.trl_vc_change_bytes(
+                    self._writer._handle, var_id, time, packed, len(packed)))
+            return
         if isinstance(value, float):
             self._writer._check(_LIB.trl_vc_change_real(self._writer._handle, var_id, time, value))
         elif isinstance(value, str):
@@ -195,9 +232,15 @@ class _TxnContext:
         attrs = list(attrs or [])
         arr = (_Attr * len(attrs))()
         backing = []
+        schema = self._writer._txn_schemas.get(txn_type_id, [])
         for i, attr in enumerate(attrs):
             arr[i].field_idx = int(attr.field_idx)
-            ft = int(getattr(attr, "_field_type", None) or getattr(attr, "field_type", None) or self._infer_field_type(attr.value))
+            # Encode the value with the schema's field type (matching the
+            # reference), falling back to FT_U64 when no schema covers the index.
+            if attr.field_idx < len(schema):
+                ft = schema[attr.field_idx]
+            else:
+                ft = int(getattr(attr, "_field_type", None) or getattr(attr, "field_type", None) or self._infer_field_type(attr.value))
             arr[i].field_type = ft
             if ft == int(FieldType.FT_STRING):
                 raw = str(attr.value).encode("utf-8")
@@ -243,6 +286,11 @@ class _CtypesWriter:
             raise OSError(f"Failed to open native writer for {self._path}")
         self._closed = False
         self._last_vc_start = 0
+        # Track signal-type encoding/width so the VC writer can reproduce the
+        # pure reference's symbolic-value mapping (e.g. 4-state "X"/"Z").
+        self._sig_types: dict[int, tuple[int, int]] = {}   # sig_type_id -> (encoding, bit_width)
+        self._var_enc: dict[int, tuple[int, int]] = {}     # var_id -> (encoding, bit_width)
+        self._txn_schemas: dict[int, list[int]] = {}       # txn_type_id -> [field_type...]
 
     @staticmethod
     def _check(status: int) -> None:
@@ -253,7 +301,9 @@ class _CtypesWriter:
         return int(_LIB.trl_intern(self._handle, s.encode("utf-8")))
 
     def add_signal_type(self, encoding, bit_width: int, radix: Radix = Radix.RX_HEX) -> int:
-        return int(_LIB.trl_add_signal_type(self._handle, int(encoding), bit_width, int(radix)))
+        sid = int(_LIB.trl_add_signal_type(self._handle, int(encoding), bit_width, int(radix)))
+        self._sig_types[sid] = (int(encoding), int(bit_width))
+        return sid
 
     def add_txn_schema(self, name, fields: Iterable) -> int:
         name_id = name if isinstance(name, int) else self.intern(str(name))
@@ -262,7 +312,11 @@ class _CtypesWriter:
         for i, field in enumerate(fields):
             arr[i].name_str_id = int(getattr(field, "name_str_id", 0))
             arr[i].field_type = int(field.field_type)
-        return int(_LIB.trl_add_txn_schema(self._handle, name_id, len(fields), arr if fields else None))
+        tid = int(_LIB.trl_add_txn_schema(self._handle, name_id, len(fields), arr if fields else None))
+        # Remember the per-field types so write_full can encode attr values with
+        # the schema's type (matching the reference), not an inferred one.
+        self._txn_schemas[tid] = [int(f.field_type) for f in fields]
+        return tid
 
     def begin_hierarchy(self, hier_id: int = 1, kind: HierKind = HierKind.HK_DESIGN, name: str = "design"):
         return _HierarchyContext(self, hier_id, int(kind), name)

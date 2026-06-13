@@ -354,6 +354,31 @@ static trl_status_t trl_vc_encode_wave(trl_buf_t *dst, const trl_vc_var_changes_
     return st;
 }
 
+/* Mirror Python _vc_data._compress_wave_entry: a stored wave entry begins with
+ * a flag byte — 0x01 (orig_size:uvarint + clen:uvarint + zlib stream) when it
+ * saves space (clen + 2 < raw_len, matching the reference threshold exactly),
+ * else 0x00 followed by the raw bytes. zlib (not LZ4) is used because its output
+ * is deterministic across implementations, which LZ4's is not — a prerequisite
+ * for byte-identical cross-impl files (the C/Python liblz4 builds diverge). */
+static trl_status_t trl_vc_emit_wave_entry(trl_buf_t *dst, const uint8_t *raw, size_t raw_len) {
+    if (raw_len) {
+        trl_buf_t comp; trl_buf_init(&comp);
+        trl_status_t st = trl_zlib_compress_buf(raw, raw_len, &comp);
+        if (st == TRL_OK && comp.size + 2 < raw_len) {
+            st = trl_buf_append_u8(dst, 0x01);
+            if (st == TRL_OK) st = trl_buf_append_uvarint(dst, raw_len);
+            if (st == TRL_OK) st = trl_buf_append_uvarint(dst, comp.size);
+            if (st == TRL_OK) st = trl_buf_append(dst, comp.data, comp.size);
+            trl_buf_free(&comp);
+            return st;
+        }
+        trl_buf_free(&comp);
+    }
+    trl_status_t st = trl_buf_append_u8(dst, 0x00);
+    if (st == TRL_OK && raw_len) st = trl_buf_append(dst, raw, raw_len);
+    return st;
+}
+
 trl_status_t trl_vc_block_encode(const trl_vc_block_t *blk, const uint32_t *var_sig_type_ids, size_t var_sig_cap, const trl_type_registry_t *reg, trl_compress_t compress, trl_buf_t *out) {
     trl_status_t st = TRL_OK;
     trl_buf_t payload, wave_data;
@@ -395,13 +420,25 @@ trl_status_t trl_vc_block_encode(const trl_vc_block_t *blk, const uint32_t *var_
         if (st == TRL_OK) st = trl_vc_encode_init_value(&payload, sig, &var->items[0]);
     }
     int use32 = 1;
+    /* Per-wave zlib framing is applied on the uncompressed-block path (mirrors
+     * the Python default compress_waves=True, alg="zlib"). When the whole block
+     * is zlib-compressed, waves are stored raw and the block compressor handles
+     * them. */
+    int wave_zlib = (compress != TRL_COMPRESS_ZLIB);
     uint64_t *positions = blk->var_count ? (uint64_t *)calloc(blk->var_count, sizeof(uint64_t)) : NULL;
     if (blk->var_count && !positions) st = TRL_ERR_OOM;
     for (size_t i = 0; st == TRL_OK && i < blk->var_count; ++i) {
         const trl_vc_var_changes_t *var = ordered[i];
         const trl_signal_type_entry_t *sig = trl_vc_lookup_signal(var_sig_type_ids, var_sig_cap, reg, var->var_id);
         positions[i] = wave_data.size;
-        st = trl_vc_encode_wave(&wave_data, var, sig, times, uniq_count);
+        if (wave_zlib) {
+            trl_buf_t raw; trl_buf_init(&raw);
+            st = trl_vc_encode_wave(&raw, var, sig, times, uniq_count);
+            if (st == TRL_OK) st = trl_vc_emit_wave_entry(&wave_data, raw.data, raw.size);
+            trl_buf_free(&raw);
+        } else {
+            st = trl_vc_encode_wave(&wave_data, var, sig, times, uniq_count);
+        }
     }
     if (st == TRL_OK) st = trl_buf_append_u8(&payload, use32 ? 4 : 8);
     for (size_t i = 0; st == TRL_OK && i < blk->var_count; ++i) {
@@ -416,8 +453,10 @@ trl_status_t trl_vc_block_encode(const trl_vc_block_t *blk, const uint32_t *var_
         trl_buf_free(&payload);
         return st;
     }
-    /* TRL_FLAG_WAVE_XOR_DELTA is always set: the encoder always uses XOR-delta+RLE. */
+    /* TRL_FLAG_WAVE_XOR_DELTA is always set: the encoder always uses XOR-delta+RLE.
+     * TRL_FLAG_WAVE_ZLIB marks the per-wave flag-byte framing emitted above. */
     uint8_t block_flags = TRL_FLAG_WAVE_XOR_DELTA;
+    if (wave_zlib) block_flags |= TRL_FLAG_WAVE_ZLIB;
 
     if (compress == TRL_COMPRESS_ZLIB && payload.size) {
         trl_buf_t comp;
@@ -532,18 +571,47 @@ trl_status_t trl_vc_iter_payload(const uint8_t *payload, size_t payload_len, uin
     if (st != TRL_OK || offset + wave_len > len) {
         free(owned); free(times); free(var_ids); free(encs); free(bws); free(positions); return TRL_ERR_CORRUPT;
     }
-    const uint8_t *wave = data + offset;
-    size_t wave_size = (size_t)wave_len;
+    const uint8_t *wave_base = data + offset;
+    size_t wave_base_size = (size_t)wave_len;
+    uint8_t *wave_tmp = NULL;   /* per-wave LZ4 scratch, freed each iteration */
 
     for (uint64_t vi = 0; st == TRL_OK && vi < var_count; ++vi) {
+        /* Each var's wave is read from `wave`/`wave_size` at offset `p`. Without
+         * per-wave compression that is the shared wave_data buffer; with
+         * TRL_FLAG_WAVE_LZ4 each entry is flag-byte framed (0x00 raw / 0x01 +
+         * orig:uvarint + clen:uvarint + lz4) and decoded from a scratch buffer. */
+        const uint8_t *wave = wave_base;
+        size_t wave_size = wave_base_size;
         size_t p = (size_t)positions[vi];
-        if (p >= wave_size) { continue; }
+        if (p >= wave_base_size) { continue; }
+        if (flags & (TRL_FLAG_WAVE_ZLIB | TRL_FLAG_WAVE_LZ4)) {
+            uint8_t wf = wave_base[p++];
+            if (wf == 0x01) {
+                uint64_t orig = 0, clen = 0;
+                if (trl_decode_uvarint(wave_base, wave_base_size, &p, &orig) != TRL_OK ||
+                    trl_decode_uvarint(wave_base, wave_base_size, &p, &clen) != TRL_OK ||
+                    p + clen > wave_base_size) { st = TRL_ERR_CORRUPT; break; }
+                wave_tmp = (uint8_t *)malloc(orig ? (size_t)orig : 1);
+                if (!wave_tmp) { st = TRL_ERR_OOM; break; }
+                if (flags & TRL_FLAG_WAVE_ZLIB) {
+                    uLongf got = (uLongf)orig;
+                    int rc = uncompress(wave_tmp, &got, wave_base + p, (uLong)clen);
+                    if (rc != Z_OK || (size_t)got != orig) { free(wave_tmp); wave_tmp = NULL; st = TRL_ERR_CORRUPT; break; }
+                } else {
+                    int got = LZ4_decompress_safe((const char *)(wave_base + p),
+                                                  (char *)wave_tmp, (int)clen, (int)orig);
+                    if (got < 0 || (size_t)got != orig) { free(wave_tmp); wave_tmp = NULL; st = TRL_ERR_CORRUPT; break; }
+                }
+                wave = wave_tmp; wave_size = (size_t)orig; p = 0;
+            }
+            /* wf == 0x00: raw bytes follow at p; the decode below self-delimits. */
+        }
 
         /* --- 2-state multi-bit: XOR-delta + RLE groups --- */
         if (encs[vi] == TRL_SE_2STATE && bws[vi] > 1) {
             uint64_t group_count = 0;
             st = trl_decode_uvarint(wave, wave_size, &p, &group_count);
-            if (st != TRL_OK) continue;
+            if (st != TRL_OK) { free(wave_tmp); wave_tmp = NULL; continue; }
             int64_t  prev_tidx = -1;
             uint64_t prev_val  = 0;
             size_t nbytes = (size_t)((bws[vi] + 7) / 8);
@@ -566,6 +634,7 @@ trl_status_t trl_vc_iter_payload(const uint8_t *payload, size_t payload_len, uin
                     cb(var_ids[vi], times[tidx], val_buf, (uint32_t)nbytes, user);
                 }
             }
+            free(wave_tmp); wave_tmp = NULL;
             continue;  /* done with this variable */
         }
 
@@ -635,7 +704,8 @@ trl_status_t trl_vc_iter_payload(const uint8_t *payload, size_t payload_len, uin
             if (tidx >= count) { st = TRL_ERR_CORRUPT; break; }
             cb(var_ids[vi], times[tidx], val, vlen, user);
         }
+        free(wave_tmp); wave_tmp = NULL;
     }
-    free(owned); free(times); free(var_ids); free(encs); free(bws); free(positions);
+    free(owned); free(times); free(var_ids); free(encs); free(bws); free(positions); free(wave_tmp);
     return st;
 }

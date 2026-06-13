@@ -344,3 +344,82 @@ The `column_layout` parameter accepts:
 | Variable-length attrs (strings) | `column_layout="auto"` | Falls back to row automatically |
 | Mixed/uncertain | `column_layout="adaptive"` | Always picks the better layout |
 | Maximum compatibility | `column_layout="row"` | Legacy behavior |
+
+---
+
+# Pluggable codecs & transforms  (format version 2.1+)
+
+These additive changes let a stream's payload be produced by a *codec* behind a
+stable SPI without breaking older readers (see `docs/design/pluggable-codecs.md`
+and `docs/codec-registry.md`). Files that use no codec/metadata features are
+**byte-for-byte identical** to pre-codec files.
+
+## Type-registry codec identity (`TRL_TYPE_TAG_STREAM_V2`, 0x05)
+
+A new, **length-prefixed** type-registry entry carries per-stream-type codec
+identity and metadata. It is emitted *only* when a stream type selects a
+non-default codec or carries transparent metadata / dependencies; otherwise the
+legacy fixed-layout stream-decl entry (tag `0x04`) is written unchanged.
+
+```
+tag(0x05) uvarint(body_len) body:
+  uvarint stream_id
+  uvarint name_str_id
+  uvarint kind_str_id
+  uvarint default_txn_type
+  uvarint codec_id_str        // string-table id of reverse-DNS codec id (0 = legacy)
+  uvarint codec_version
+  uvarint param_len  params[param_len]      // codec-private, opaque to core
+  typed-attr-list metadata                  // transparent metadata (see below)
+  uvarint dep_count  dep_count × uvarint     // input-stream dependency catalog
+```
+
+**Convention:** every type-registry tag `>= 0x05` is length-prefixed, so a reader
+that does not recognise a tag skips the entry by its declared length and keeps
+parsing — forward-compatible evolution.
+
+## Block flag `FLAG_STRUCT_CODEC` (0x80)
+
+Set on a data block whose payload was produced by the stream-type's structural
+codec rather than the legacy built-in path. Value-change blocks that set it are
+**self-identifying**: the payload begins with `uvarint codec_id_str` (interned),
+so the reader resolves and dispatches the codec, and a reader lacking the codec
+skips the block by length (the 10-byte header `u64` length stays authoritative).
+
+## Transparent metadata (typed)
+
+A small **closed** value-type set readable *without* the codec:
+`bool, i64, u64, f64, string` + homogeneous arrays (`AttrType`, `AT_ARRAY` flag
+OR'd with the element type; scalar tags `0x05..0x3F` and `0x80+` reserved). A
+typed attr is `uvarint key_str_id, u8 type, value-by-type` (string values are
+string-table ids on the wire). It attaches at three scopes:
+
+- **trace-global** — a skippable `BLK_META` (0x04) block; its offset is recorded
+  in the index under sentinel `0x03`.
+- **stream-type** — in the `TRL_TYPE_TAG_STREAM_V2` entry above.
+- **stream-instance** — the `H_ATTR2` (0x06) hierarchy tag (legacy `H_ATTR`
+  decodes as a `string`).
+
+Profiles (`trlog.profile`) are a transparent array-of-string of reverse-DNS ids.
+
+## Opaque keyed metadata (`BLK_AUX`, 0x12)
+
+Opaque bulk metadata is a non-temporal stream: the same self-delimiting framing
+and byte compression as data blocks, addressed by **key** instead of time and
+recorded in a parallel **key index** in the index block (sentinel `0x04`):
+`(owner_stream_id, key, ordinal, offset, length)`. A reader enumerates aux
+blocks by key and skips their opaque bytes without the producing codec.
+
+## `core.bytesplit` transform
+
+Byte-plane split (Parquet BYTE_STREAM_SPLIT) for fixed-width REAL / wide-vector
+signals, composed under byte compression. See `docs/codec-registry.md` for the
+block layout. Opt-in via `writer.begin_vc_block(t, codec=CORE_BYTESPLIT)`.
+
+## `core.derived` virtual signals
+
+Derived (virtual) signals store an **expression over other signals**, not
+per-event data. Their definitions live in opaque keyed (`BLK_AUX`) blocks under
+a reserved owner, keyed by the derived var id; with `materialized=True` the
+computed changes are additionally written as an ordinary value-change block. See
+`docs/codec-registry.md` for the definition layout and the expression bytecode.

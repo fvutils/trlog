@@ -51,7 +51,7 @@ class VcDataBlock:
         use_zstd: bool = False,
         compress_time_table: bool = False,
         compress_waves: bool = True,
-        compress_waves_alg: str = "lz4",
+        compress_waves_alg: str = "zlib",
         seekable: bool = False,
     ) -> None:
         self.start_time = start_time
@@ -753,7 +753,7 @@ def _pack_9state(value, bit_width: int) -> bytes:
         if isinstance(value, int):
             bit_val = (value >> (bit_width - 1 - i)) & 1
             code = bit_val
-        elif isinstance(value, (list, tuple)):
+        elif isinstance(value, (list, tuple, str)):
             v = value[i] if i < len(value) else 0
             code = _9STATE_CODES.get(v, 0)
         else:

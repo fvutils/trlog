@@ -10,6 +10,7 @@
 #include <lz4.h>
 
 #include "trl/trl.h"
+#include "trl/trl_codec.h"
 
 #define TRL_MAGIC_BYTES "TRL\x00\x00\x00\x01\x00"
 #define TRL_MAGIC_LEN 8
@@ -31,6 +32,9 @@
 #define TRL_FLAG_COMPRESS_ALG 0x02
 /* BLK_VC_DATA encoding flags (survive whole-block decompression) */
 #define TRL_FLAG_WAVE_XOR_DELTA 0x10
+/* Per-wave LZ4 compression (sub-section flag; valid only when the block is not
+ * whole-block compressed). Each wave entry is prefixed with a flag byte. */
+#define TRL_FLAG_WAVE_LZ4 0x08
 /* Per-wave zlib compression (sub-section flag, like FLAG_WAVE_LZ4) */
 #define TRL_FLAG_WAVE_ZLIB 0x20
 /* Seekability footer: last 8 bytes of payload = u64 offset to position table */
@@ -196,6 +200,13 @@ typedef struct {
     trl_index_entry_t *txn_entries;
     size_t txn_count;
     size_t txn_cap;
+    /* Extended metadata-offset section (sentinel 0x01) — block offsets so a
+     * reader can open without a linear scan (mirrors Python _index.py). */
+    uint64_t strtab_offset;
+    uint64_t typereg_offset;
+    uint64_t *hier_offsets;
+    size_t hier_count;
+    size_t hier_cap;
 } trl_index_t;
 
 struct trl_writer {
@@ -214,6 +225,10 @@ struct trl_writer {
     bool txn_active;
     uint32_t *global_var_sig_type_ids;
     size_t global_var_cap;
+    /* Phase 3.5: selected non-core value-change codec + its per-stream state.
+     * NULL vc_codec == the core value-change codec (default path). */
+    const trl_vc_codec_t *vc_codec;
+    void *vc_codec_self;
 };
 
 struct trl_reader {
@@ -227,6 +242,18 @@ struct trl_reader {
     uint32_t *var_sig_type_ids;
     size_t var_sig_cap;
     trl_index_t index;
+};
+
+/* Storage-SPI handles (opaque in trl/trl_codec.h, defined here for the core
+ * and built-in codecs). For Phase 1 the built-in codecs reach the existing
+ * internals through the bound writer/reader; the richer SPI accretes later. */
+struct trl_store {
+    trl_writer_t *writer;
+    trl_reader_t *reader;
+};
+
+struct trl_blkout {
+    trl_buf_t *buf;   /* the codec appends its (block-framed) bytes here */
 };
 
 static inline void trl_write_le64(uint8_t *dst, uint64_t v) {
@@ -363,7 +390,9 @@ static inline trl_status_t trl_zlib_compress_buf(const uint8_t *src, size_t len,
     if (st != TRL_OK) {
         return st;
     }
-    int rc = compress2(out->data, &dest_len, src, (uLong)len, Z_BEST_SPEED);
+    /* Match Python's zlib.compress default (Z_DEFAULT_COMPRESSION = level 6) so
+     * whole-block compressed output is byte-identical across implementations. */
+    int rc = compress2(out->data, &dest_len, src, (uLong)len, Z_DEFAULT_COMPRESSION);
     if (rc != Z_OK) {
         return TRL_ERR_COMPRESS;
     }
@@ -447,6 +476,7 @@ void trl_index_init(trl_index_t *idx);
 void trl_index_free(trl_index_t *idx);
 trl_status_t trl_index_add_vc(trl_index_t *idx, uint64_t start, uint64_t end, uint64_t offset);
 trl_status_t trl_index_add_txn(trl_index_t *idx, uint64_t start, uint64_t end, uint64_t offset);
+trl_status_t trl_index_add_hier_offset(trl_index_t *idx, uint64_t offset);
 trl_status_t trl_index_encode_block(const trl_index_t *idx, trl_buf_t *out);
 trl_status_t trl_index_decode_payload(trl_index_t *idx, const uint8_t *payload, size_t payload_len);
 const trl_index_entry_t *trl_index_seek_vc(const trl_index_t *idx, uint64_t time);

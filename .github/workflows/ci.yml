@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    env:
+      # The trlog package is run from the source tree (no root install).
+      PYTHONPATH: python/src
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build + test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake zlib1g-dev
+          python -m pip install --upgrade pip
+          python -m pip install pytest lz4 zstandard
+
+      - name: Build C library + tests
+        run: |
+          cmake -S c -B c/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build c/build -j
+
+      - name: Run C tests (ctest)
+        run: ctest --test-dir c/build --output-on-failure
+
+      - name: Run Python tests (pure path)
+        # With c/build/libtrl.so present, _native._load_library finds it, so the
+        # cross-impl parity harness (test_cross_impl_parity.py) runs here too:
+        # pure-Python vs ctypes-native, recording current divergences as xfail.
+        run: pytest tests/ -q
+
+      - name: Golden + parity checks (explicit, as required gate)
+        run: |
+          pytest tests/integration/test_byte_golden.py \
+                 tests/integration/test_cross_impl_parity.py -q
+
+      # NOTE: the full pytest suite is NOT yet runnable under
+      # TRL_USE_CTYPES_NATIVE=1 — the ctypes binding is an incomplete subset
+      # (e.g. the native reader lacks txn/random-access iteration). Native
+      # coverage in this phase is the C `ctest` harness above plus the
+      # cross-impl parity test. Re-enable a full native pytest run once the
+      # binding is complete (later phases).

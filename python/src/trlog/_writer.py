@@ -17,11 +17,16 @@ from ._type_registry import TypeRegistry
 from ._types import (
     BlockType, HierKind, SignalEncoding, VarDir, Radix, FieldType,
     FieldDef, ScopeType, TxnAttr, FLAG_COMPRESSED, BLOCK_HEADER_SIZE,
-    WellKnownAttr,
+    WellKnownAttr, AttrType, TypedAttr,
 )
+from ._metadata import MetaBlock, infer_attr_type
 from ._ext import ExtBlock
+from ._aux import AuxBlock
 from ._vc_data import VcDataBlock
 from ._txn_data import TxnDataBlock
+from .codec import (
+    Store, lookup_vc_codec, lookup_txn_codec, CORE_VALUECHANGE, CORE_RECORD,
+)
 
 # Magic bytes for BLK_FILE_HDR
 TRL_MAGIC = b'TRL\x00\x00\x00\x01\x00'
@@ -157,6 +162,12 @@ class _HierarchyContext:
         val_id = self._writer._strtab.intern(str(value))
         self._blk.add_attr(key_id, val_id)
 
+    def add_typed_attr(self, key: str, value: Any, attr_type: Optional[int] = None) -> None:
+        """Attach a typed transparent attr (H_ATTR2, §2.3) to the most recently
+        declared scope/var/stream. Type is inferred from ``value`` if omitted."""
+        self._blk.add_typed_attr(
+            self._writer._build_typed_attr(key, value, attr_type))
+
     def flush(self) -> None:
         if not self._flushed:
             self._writer._flush_hierarchy(self._blk)
@@ -172,22 +183,23 @@ class _HierarchyContext:
 class _VcBlockContext:
     """Returned by :meth:`TrlWriter.begin_vc_block`; acts as a context manager."""
 
-    def __init__(self, writer: 'TrlWriter', start_time: int) -> None:
+    def __init__(self, writer: 'TrlWriter', start_time: int,
+                 codec: Optional[str] = None) -> None:
         self._writer = writer
-        # Use var_id → (enc, bw) so VcDataBlock can resolve types for any declared variable.
-        # Fall back to _sig_types (keyed by sig_type_id) for compatibility with callers that
-        # pass var_ids equal to their sig_type_ids (fallback when one type per var).
-        sig_types = dict(writer._sig_types)   # sig_type_id → (enc, bw) as baseline
-        sig_types.update(writer._var_types)   # var_id → (enc, bw) overrides / adds
-        self._blk = VcDataBlock(
-            start_time=start_time,
-            sig_types=sig_types,
-            compress=writer._compress,
-            compress_time_table=writer._compress_time_table,
-            compress_waves=writer._compress_waves,
-            compress_waves_alg=writer._compress_waves_alg,
-            seekable=writer._seekable,
-        )
+        # Resolve the value-change codec for this block. The default path reuses
+        # the trace-level core codec + state so its output stays byte-identical;
+        # an explicitly selected codec (e.g. core.bytesplit) gets a fresh
+        # per-block state and produces a self-identifying FLAG_STRUCT_CODEC block.
+        if codec is None or codec == CORE_VALUECHANGE:
+            self._codec = writer._vc_codec
+            self._state = writer._vc_state
+        else:
+            resolved = lookup_vc_codec(codec)
+            if resolved is None:
+                raise ValueError(f"unknown value-change codec {codec!r}")
+            self._codec = resolved
+            self._state = resolved.open_writer(writer._store, 0, b"")
+        self._blk = self._codec.new_block(writer._store, self._state, start_time)
 
     def add_change(self, var_id: int, time: int, value: Any) -> None:
         self._blk.add_change(var_id, time, value)
@@ -196,7 +208,7 @@ class _VcBlockContext:
         self._blk.set_initial(var_id, value)
 
     def flush(self) -> None:
-        self._writer._flush_vc(self._blk)
+        self._writer._flush_vc(self._blk, codec=self._codec, state=self._state)
 
     def __enter__(self) -> '_VcBlockContext':
         return self
@@ -216,11 +228,10 @@ class _TxnBlockContext:
     ) -> None:
         self._writer = writer
         self._stream_inst_id = stream_inst_id
-        self._blk = TxnDataBlock(start_time=start_time, compress=writer._compress,
-                                  column_layout=writer._column_layout)
-        self._blk._delta_encode = writer._delta_encode_txn
-        for txn_type_id, fts in writer._txn_schemas.items():
-            self._blk.set_schema(txn_type_id, fts)
+        # Dispatch block construction through the resolved record codec
+        # (the re-homed built-in produces a byte-identical TxnDataBlock).
+        self._blk = writer._txn_codec.new_block(
+            writer._store, writer._txn_state, start_time)
 
     def write_full(
         self,
@@ -317,10 +328,10 @@ class TrlWriter:
         compressor: str = "zlib",
         compress_time_table: bool = False,
         compress_waves: bool = True,
-        compress_waves_alg: str = "lz4",
+        compress_waves_alg: str = "zlib",
         seekable: bool = False,
         scope_grouped: bool = False,
-        column_layout: str = "auto",
+        column_layout: str = "row",
     ) -> None:
         self._compress = compress
         self._compressor = compressor
@@ -334,6 +345,21 @@ class TrlWriter:
         self._strtab = StringTable()
         self._typereg = TypeRegistry()
         self._index = IndexBlock()
+        self._meta = MetaBlock()   # trace-global transparent metadata (§2.3)
+        # Per-(owner,key) ordinal counter for opaque keyed (aux) blocks (§2.4)
+        self._aux_ordinals: Dict[Tuple[int, int], int] = {}
+        # Derived (virtual) signals (§5.2): next id + var_id → input var ids
+        self._next_derived_id: int = 0
+        self._derived_inputs: Dict[int, list] = {}
+
+        # Codec SPI seam (design §4.3). The built-in VC/TXN encoders are reached
+        # through the registry like any other codec; the default path resolves
+        # to the re-homed core codecs and emits byte-identical output.
+        self._store = Store(writer=self)
+        self._vc_codec = lookup_vc_codec(CORE_VALUECHANGE)
+        self._txn_codec = lookup_txn_codec(CORE_RECORD)
+        self._vc_state = self._vc_codec.open_writer(self._store, 0, b"")
+        self._txn_state = self._txn_codec.open_writer(self._store, 0, b"")
 
         # type metadata for context managers
         self._sig_types: Dict[int, Tuple[SignalEncoding, int]] = {}  # sig_type_id → (enc, bw)
@@ -389,6 +415,129 @@ class TrlWriter:
         kind_id = self._strtab.intern(kind) if kind else 0
         return self._typereg.add_stream_decl(name_id, kind_id)
 
+    # ------------------------------------------------------------------
+    # Transparent metadata (impl-plan §2.3 / §2.6) — readable codec-free
+    # ------------------------------------------------------------------
+
+    def _build_typed_attr(self, key: str, value, attr_type: Optional[int] = None) -> TypedAttr:
+        """Build a :class:`TypedAttr`, interning the key and any string values."""
+        key_id = self._strtab.intern(key)
+        if attr_type is None:
+            attr_type = infer_attr_type(value)
+        base = attr_type & ~int(AttrType.AT_ARRAY)
+        if attr_type & int(AttrType.AT_ARRAY):
+            if base == int(AttrType.AT_STR):
+                value = [self._strtab.intern(v) for v in value]
+            else:
+                value = list(value)
+        elif base == int(AttrType.AT_STR):
+            value = self._strtab.intern(value)
+        return TypedAttr(key_str_id=key_id, attr_type=int(attr_type), value=value)
+
+    def add_trace_metadata(self, key: str, value, attr_type: Optional[int] = None) -> None:
+        """Attach trace-global transparent metadata (serialized as a ``BLK_META``
+        block). ``attr_type`` is inferred from ``value`` when omitted."""
+        self._meta.add(self._build_typed_attr(key, value, attr_type))
+
+    def add_stream_metadata(
+        self, stream_type_id: int, key: str, value, attr_type: Optional[int] = None
+    ) -> None:
+        """Attach transparent metadata to a stream *type* (queryable codec-free,
+        carried in the type-registry V2 entry)."""
+        self._typereg.add_stream_metadata(
+            stream_type_id, self._build_typed_attr(key, value, attr_type))
+
+    def add_derived_signal(
+        self,
+        name: str,
+        expr,
+        inputs,
+        bit_width: int,
+        materialized: bool = False,
+        input_changes=None,
+    ) -> int:
+        """Define a derived (virtual) signal as an *expression over other
+        signals* (design §5.2) and return its var id. No per-event value data is
+        stored — just the expression (in an aux block) — and the reader evaluates
+        it lazily at the union of the inputs' change times.
+
+        ``expr`` is a ``trlog._derived.Expr`` AST (or raw bytecode). ``inputs``
+        are the input var ids the expression's ``Input(i)`` slots refer to.
+        With ``materialized=True`` the computed changes are *also* written as an
+        ordinary value-change block (so a reader lacking the derived codec still
+        sees values); ``input_changes`` must then map each input var id to its
+        ``[(time, value), ...]`` list.
+        """
+        from ._derived import (
+            Expr, compile_expr, DerivedDef, FLAG_MATERIALIZED, evaluate_changes,
+            DERIVED_AUX_OWNER, DERIVED_VAR_BASE,
+        )
+        from ._deps import DependencyGraph
+
+        bytecode = compile_expr(expr) if isinstance(expr, Expr) else bytes(expr)
+        inputs = list(inputs)
+        var_id = DERIVED_VAR_BASE + self._next_derived_id
+        self._next_derived_id += 1
+
+        # Cycle detection over the derived-var dependency graph (reject at write).
+        candidate = dict(self._derived_inputs)
+        candidate[var_id] = inputs
+        DependencyGraph.from_catalog(candidate).validate_acyclic()
+        self._derived_inputs[var_id] = inputs
+
+        flags = FLAG_MATERIALIZED if materialized else 0
+        defn = DerivedDef(bit_width=bit_width, input_var_ids=inputs,
+                          bytecode=bytecode, flags=flags)
+        # Derived signals are integer bit-vectors; register the type so a
+        # materialized block (and read_signal on it) resolves.
+        self._var_types[var_id] = (SignalEncoding.SE_2STATE, bit_width)
+
+        # Persist the definition in an aux block keyed by the derived var id.
+        name_id = self._strtab.intern(name)
+        self.write_aux(DERIVED_AUX_OWNER, var_id,
+                       encode_uvarint(name_id) + defn.encode(), compress=False)
+
+        if materialized:
+            if input_changes is None:
+                raise ValueError("materialized=True requires input_changes")
+            changes = evaluate_changes(
+                defn, [list(input_changes[i]) for i in inputs])
+            start = changes[0][0] if changes else 0
+            with self.begin_vc_block(start) as vc:
+                for t, v in changes:
+                    vc.add_change(var_id, t, v)
+        return var_id
+
+    def declare_dependencies(self, stream_type_id: int, input_stream_ids) -> None:
+        """Declare the input stream types a stream's codec depends on (§2.5).
+
+        The dependency graph is validated immediately, so a cycle is **rejected
+        at write time** (design §4.4) the moment the offending edge is added."""
+        from ._deps import DependencyGraph
+        # Validate a *candidate* graph that includes the new edge before
+        # committing, so a rejected (cyclic) edge is never persisted.
+        catalog = self._typereg.dependency_catalog()
+        catalog[stream_type_id] = list(input_stream_ids)
+        DependencyGraph.from_catalog(catalog).validate_acyclic()  # raises on cycle
+        self._typereg.set_stream_dependencies(stream_type_id, input_stream_ids)
+
+    def add_stream_profile(self, stream_type_id: int, profile_id: str) -> None:
+        """Append a reverse-DNS profile id to a stream type (impl-plan §2.6).
+        Profiles are stored as a transparent array-of-string under the
+        well-known ``trlog.profile`` key."""
+        entry = self._typereg.get_stream_decl(stream_type_id)
+        key_id = self._strtab.intern(WellKnownAttr.PROFILE)
+        pid = self._strtab.intern(profile_id)
+        for attr in entry.metadata:
+            if attr.key_str_id == key_id and (attr.attr_type & int(AttrType.AT_ARRAY)):
+                attr.value.append(pid)
+                return
+        self._typereg.add_stream_metadata(
+            stream_type_id,
+            TypedAttr(key_str_id=key_id,
+                      attr_type=int(AttrType.AT_ARRAY | AttrType.AT_STR),
+                      value=[pid]))
+
     def add_enum_type(self, name: str, values: list) -> int:
         from ._types import EnumValue
         name_id = self._strtab.intern(name)
@@ -425,8 +574,12 @@ class TrlWriter:
     ) -> _HierarchyContext:
         return _HierarchyContext(self, hier_id=hier_id, kind=kind, name=name)
 
-    def begin_vc_block(self, start_time: int) -> _VcBlockContext:
-        return _VcBlockContext(self, start_time)
+    def begin_vc_block(self, start_time: int, codec: Optional[str] = None) -> _VcBlockContext:
+        """Begin a value-change block. ``codec`` selects a non-default
+        value-change codec by its reverse-DNS id (e.g.
+        ``trlog.codec.CORE_BYTESPLIT``); the default is the core value-change
+        encoder, which is byte-identical to pre-codec output."""
+        return _VcBlockContext(self, start_time, codec=codec)
 
     def begin_txn_block(
         self,
@@ -440,6 +593,27 @@ class TrlWriter:
         blk = ExtBlock(ext_type=ext_type, ext_version=ext_version, payload=payload)
         self._file.write(blk.encode_block())
 
+    def write_aux(
+        self,
+        owner_stream_id: int,
+        key: int,
+        payload: bytes,
+        compress: Optional[bool] = None,
+    ) -> int:
+        """Write an opaque keyed (non-temporal) metadata block (``BLK_AUX``,
+        §2.4) and index it by ``(owner_stream_id, key)``. Multiple blocks with
+        the same key are distinguished by an auto-incrementing ordinal, which
+        is returned. ``payload`` is codec-produced bytes, opaque to the core."""
+        if compress is None:
+            compress = self._compress
+        ordinal = self._aux_ordinals.get((owner_stream_id, key), 0)
+        self._aux_ordinals[(owner_stream_id, key)] = ordinal + 1
+        offset = self._file.tell()
+        block = AuxBlock.encode(payload, compress=compress)
+        self._file.write(block)
+        self._index.add_aux_entry(owner_stream_id, key, ordinal, offset, len(block))
+        return ordinal
+
     # ------------------------------------------------------------------
     # Internal flush helpers
     # ------------------------------------------------------------------
@@ -450,11 +624,16 @@ class TrlWriter:
         encoded = blk.encode_block(compress=self._compress)
         self._file.write(encoded)
 
-    def _flush_vc(self, blk: VcDataBlock) -> None:
-        if not self._scope_grouped:
+    def _flush_vc(self, blk: VcDataBlock, codec=None, state=None) -> None:
+        codec = codec if codec is not None else self._vc_codec
+        state = state if state is not None else self._vc_state
+        # Scope-grouped splitting is only defined for the default core codec.
+        if not self._scope_grouped or codec is not self._vc_codec:
             offset = self._file.tell()
-            encoded = blk.encode_block()
-            self._index.add_vc_entry(blk.start_time, blk.end_time, offset)
+            # Route the encode through the codec (the core codec returns the
+            # block's own bytes + (start,end); the core does the indexing).
+            encoded, start, end = codec.encode_block(state, self._store)
+            self._index.add_vc_entry(start, end, offset)
             self._file.write(encoded)
             return
 
@@ -495,10 +674,9 @@ class TrlWriter:
         self, blk: TxnDataBlock, stream_inst_id: Optional[int] = None
     ) -> None:
         offset = self._file.tell()
-        encoded = blk.encode_block()
+        encoded, start, end = self._txn_codec.encode_block(self._txn_state, self._store)
         sid = stream_inst_id if stream_inst_id is not None else 0xFFFFFFFF
-        self._index.add_txn_entry(blk.start_time, blk.end_time, offset,
-                                   stream_inst_id=sid)
+        self._index.add_txn_entry(start, end, offset, stream_inst_id=sid)
         self._file.write(encoded)
 
     # ------------------------------------------------------------------
@@ -509,6 +687,30 @@ class TrlWriter:
         if self._closed:
             return
         self._closed = True
+
+        # Codec trace-finalize (design §4.7): runs after the last encode_block
+        # and before the index/footer, so codecs can serialize trace-wide
+        # accumulated metadata. Per design, finalize runs in **reverse
+        # dependency order** (a depended-on stream finalizes after every stream
+        # that feeds it). The catalog is validated acyclic here so that order is
+        # well-defined; the built-in VC/TXN codecs are trace singletons with no
+        # inter-stream deps, so the order is trivial today and becomes
+        # load-bearing with per-stream codecs (Phase 4/5).
+        from ._deps import DependencyGraph
+        DependencyGraph.from_catalog(
+            self._typereg.dependency_catalog()).validate_acyclic()
+        self._vc_codec.finalize(self._vc_state, self._store)
+        self._txn_codec.finalize(self._txn_state, self._store)
+        self._vc_codec.close(self._vc_state)
+        self._txn_codec.close(self._txn_state)
+
+        # Trace-global transparent metadata block (BLK_META). Written only when
+        # any trace metadata was added, so legacy files stay byte-identical.
+        meta_offset = 0
+        if self._meta:
+            meta_offset = self._file.tell()
+            self._file.write(self._meta.encode_block(compress=self._compress))
+        self._index.meta_offset = meta_offset
 
         # Flush string table and type registry, recording their file offsets
         strtab_offset = self._file.tell()

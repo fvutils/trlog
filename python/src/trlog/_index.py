@@ -30,6 +30,11 @@ class IndexBlock:
         self.strtab_offset:    int = 0
         self.typereg_offset:   int = 0
         self.hier_offsets: List[int] = []
+        # Trace-global transparent metadata block offset (BLK_META, §2.3); 0 = none
+        self.meta_offset:      int = 0
+        # Key index for opaque keyed (aux) blocks (§2.4):
+        # (owner_stream_id, key, ordinal, offset, length)
+        self._key_entries: List[Tuple[int, int, int, int, int]] = []
 
     def add_vc_entry(self, start_time: int, end_time: int, file_offset: int) -> None:
         self._vc_entries.append((start_time, end_time, file_offset))
@@ -45,6 +50,26 @@ class IndexBlock:
 
     def add_var_range(self, var_id: int, first_change: int, last_change: int) -> None:
         self._var_ranges.append((var_id, first_change, last_change))
+
+    def add_aux_entry(
+        self, owner_stream_id: int, key: int, ordinal: int,
+        file_offset: int, length: int,
+    ) -> None:
+        """Record a keyed (aux) block in the key index (§2.4)."""
+        self._key_entries.append((owner_stream_id, key, ordinal, file_offset, length))
+
+    def find_aux(self, owner_stream_id: int, key: int):
+        """Return ``(ordinal, offset, length)`` for an aux key, ordinal-sorted."""
+        out = [(o, off, ln) for (own, k, o, off, ln) in self._key_entries
+               if own == owner_stream_id and k == key]
+        out.sort()
+        return out
+
+    def aux_entries(self, owner_stream_id: int | None = None):
+        """Enumerate all key-index entries (optionally for one owner). This is
+        the codec-free discovery surface for opaque metadata."""
+        return [e for e in self._key_entries
+                if owner_stream_id is None or e[0] == owner_stream_id]
 
     def encode_block(self) -> bytes:
         payload = self._encode_payload()
@@ -82,6 +107,21 @@ class IndexBlock:
             for s, e, off, sid in self._txn_entries:
                 out += encode_uvarint(sid)
                 out += struct.pack('<QQQ', s, e, off)
+        # Trace-global metadata block offset (sentinel 0x03). Written only when
+        # a BLK_META block exists, so legacy files stay byte-identical.
+        if self.meta_offset:
+            out += b'\x03'
+            out += struct.pack('<Q', self.meta_offset)
+        # Key index for opaque keyed (aux) blocks (sentinel 0x04). Written only
+        # when aux blocks exist, so legacy files stay byte-identical.
+        if self._key_entries:
+            out += b'\x04'
+            out += encode_uvarint(len(self._key_entries))
+            for owner, key, ordinal, off, length in self._key_entries:
+                out += encode_uvarint(owner)
+                out += encode_uvarint(key)
+                out += encode_uvarint(ordinal)
+                out += struct.pack('<QQ', off, length)
         return bytes(out)
 
     def _decode_payload(self, data: bytes) -> None:
@@ -133,6 +173,24 @@ class IndexBlock:
             # the in-memory representation now carries stream_inst_id.
             if stream_entries:
                 self._txn_entries = stream_entries
+        # Trace-global metadata block offset (sentinel 0x03)
+        self.meta_offset = 0
+        if offset < len(data) and data[offset] == 0x03:
+            offset += 1
+            self.meta_offset, = struct.unpack_from('<Q', data, offset)
+            offset += 8
+        # Key index for opaque keyed (aux) blocks (sentinel 0x04)
+        self._key_entries = []
+        if offset < len(data) and data[offset] == 0x04:
+            offset += 1
+            kcount, offset = decode_uvarint(data, offset)
+            for _ in range(kcount):
+                owner, offset = decode_uvarint(data, offset)
+                key, offset = decode_uvarint(data, offset)
+                ordinal, offset = decode_uvarint(data, offset)
+                off, length = struct.unpack_from('<QQ', data, offset)
+                offset += 16
+                self._key_entries.append((owner, key, ordinal, off, length))
 
     def find_vc_blocks(self, start: int, end: int) -> List[int]:
         """Return file offsets of VC blocks whose time range overlaps [start, end]."""

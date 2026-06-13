@@ -124,3 +124,74 @@ class TestMultiBlock:
 
         assert combined.get_signal_type(1).encoding == SignalEncoding.SE_2STATE
         assert combined.get_signal_type(2).encoding == SignalEncoding.SE_4STATE
+
+
+class TestStreamCodecV2:
+    """TRL_TYPE_TAG_STREAM_V2 — codec identity on a stream decl (Phase 1, §2.1)."""
+
+    def test_legacy_stream_decl_is_byte_unchanged(self):
+        """A stream decl with no codec must still emit the legacy 0x04 tag."""
+        from trlog._type_registry import _TAG_STREAM_DECL, _encode_stream_decl
+        reg = TypeRegistry()
+        sid = reg.add_stream_decl(name_str_id=7, kind_str_id=8, default_txn_type=1)
+        enc = _encode_stream_decl(reg.get_stream_decl(sid))
+        assert enc[0] == _TAG_STREAM_DECL
+
+    def test_v2_roundtrip_with_codec(self):
+        from trlog._type_registry import _TAG_STREAM_DECL_V2, _encode_stream_decl
+        reg = TypeRegistry()
+        sid = reg.add_stream_decl(name_str_id=7, kind_str_id=8, default_txn_type=1)
+        reg.set_stream_codec(sid, codec_id_str=42, codec_version=3,
+                             params=b"\x01\x02\x03")
+        assert _encode_stream_decl(reg.get_stream_decl(sid))[0] == _TAG_STREAM_DECL_V2
+
+        block = reg.encode_block()
+        reg2 = TypeRegistry()
+        reg2.read_block(block[10:])
+        sd = reg2.get_stream_decl(sid)
+        assert sd.name_str_id == 7
+        assert sd.kind_str_id == 8
+        assert sd.default_txn_type == 1
+        assert sd.codec_id_str == 42
+        assert sd.codec_version == 3
+        assert sd.params == b"\x01\x02\x03"
+        assert sd.has_codec
+
+    def test_legacy_and_v2_mixed_in_one_block(self):
+        reg = TypeRegistry()
+        s_legacy = reg.add_stream_decl(name_str_id=1)
+        s_codec = reg.add_stream_decl(name_str_id=2)
+        reg.set_stream_codec(s_codec, codec_id_str=99, codec_version=1)
+        reg2 = TypeRegistry()
+        reg2.read_block(reg.encode_block()[10:])
+        assert reg2.get_stream_decl(s_legacy).has_codec is False
+        assert reg2.get_stream_decl(s_codec).codec_id_str == 99
+
+    def test_unknown_length_prefixed_tag_is_skipped(self):
+        """A reader that doesn't know a >=0x05 length-prefixed tag skips it and
+        keeps parsing later entries (forward-compat)."""
+        from trlog._codec import encode_uvarint
+        from trlog._string_table import _make_block
+        from trlog._types import BlockType
+        reg = TypeRegistry()
+        reg.add_signal_type(SignalEncoding.SE_2STATE, bit_width=1)
+        payload = bytearray(reg._encode_payload())
+        # bump the entry count and append a bogus future tag 0x7F with a length
+        # prefix, followed by a real signal-type entry the reader must still see.
+        # Rebuild: count, then existing single entry, then unknown, then extra.
+        from trlog._type_registry import _encode_signal_type
+        from trlog._types import SignalTypeEntry
+        body = bytearray()
+        body += encode_uvarint(3)
+        body += _encode_signal_type(SignalTypeEntry(sig_type_id=1, encoding=SignalEncoding.SE_2STATE, bit_width=1))
+        unknown = b"\xde\xad\xbe\xef"
+        body.append(0x7F)
+        body += encode_uvarint(len(unknown))
+        body += unknown
+        body += _encode_signal_type(SignalTypeEntry(sig_type_id=2, encoding=SignalEncoding.SE_4STATE, bit_width=4))
+        block = _make_block(BlockType.BLK_TYPE_REG, 0, bytes(body))
+        reg2 = TypeRegistry()
+        reg2.read_block(block[10:])
+        # The entry *after* the unknown tag must have been parsed.
+        assert reg2.get_signal_type(1).encoding == SignalEncoding.SE_2STATE
+        assert reg2.get_signal_type(2).encoding == SignalEncoding.SE_4STATE

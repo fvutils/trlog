@@ -12,8 +12,10 @@ class BlockType(enum.IntEnum):
     BLK_STR_TABLE = 0x01
     BLK_TYPE_REG  = 0x02
     BLK_HIERARCHY = 0x03
+    BLK_META      = 0x04   # trace-global transparent metadata (impl-plan §2.3)
     BLK_VC_DATA   = 0x10
     BLK_TXN_DATA  = 0x11
+    BLK_AUX       = 0x12   # opaque keyed (non-temporal) metadata (impl-plan §2.4)
     BLK_EXT       = 0x20
     BLK_INDEX     = 0xFE
     BLK_SKIP      = 0xFF
@@ -114,6 +116,24 @@ class HierTag(enum.IntEnum):
     H_VAR     = 0x03
     H_STREAM  = 0x04
     H_ATTR    = 0x05
+    H_ATTR2   = 0x06   # typed transparent attr (impl-plan §2.3); H_ATTR = STR
+
+
+class AttrType(enum.IntEnum):
+    """Transparent-metadata value types (impl-plan §2.3, design §4.5).
+
+    A deliberately small **closed** set so a generic consumer can render, index,
+    and filter any transparent value with zero domain knowledge. ``AT_ARRAY`` is
+    OR'd with a scalar element type to form a homogeneous array (e.g.
+    ``AT_ARRAY | AT_STR``). Scalar tags ``0x05..0x3F`` and the high range
+    ``0x80+`` are reserved so record/struct types can become transparent later
+    without a format break (decision 3)."""
+    AT_BOOL  = 0x00
+    AT_I64   = 0x01
+    AT_U64   = 0x02
+    AT_F64   = 0x03
+    AT_STR   = 0x04
+    AT_ARRAY = 0x40   # bit flag: OR with a scalar type → homogeneous array
 
 
 # File magic bytes: "TRL\x00" + version 1.0
@@ -136,6 +156,20 @@ FLAG_SEEKABLE     = 0x40  # last 8 bytes of payload = u64 offset to position tab
 # BLK_TXN_DATA encoding flags
 FLAG_TXN_DELTA    = 0x04  # txn_id / timestamps are delta-encoded with svarint
 FLAG_TXN_COLUMN   = 0x08  # BLK_TXN_DATA payload uses column-oriented layout
+
+# Pluggable-codec block flag (design §2.2 / impl-plan §2.2). Generic across
+# block kinds: "payload produced by the stream-type's structural codec" vs the
+# legacy built-in path. Uses the top bit, free in both the VC sub-flag space
+# (0x04..0x40) and the TXN flag space (0x04, 0x08); never collides with the
+# generic FLAG_COMPRESSED/FLAG_COMPRESS_ALG bits. A value of 0 = legacy.
+FLAG_STRUCT_CODEC = 0x80
+
+# Type-registry entry tag carrying per-stream-type codec identity + params
+# (impl-plan §2.1; decision 6 — a dedicated new tag, not a version byte on the
+# existing TRL_TYPE_TAG_STREAM tag). Length-prefixed so old readers skip it by
+# its length. Emitted ONLY when a stream type actually selects a non-default
+# codec, so legacy files are byte-for-byte unchanged.
+TRL_TYPE_TAG_STREAM_V2 = 0x05
 
 
 class TxnColumnId(enum.IntEnum):
@@ -209,6 +243,30 @@ class StreamDeclEntry:
     name_str_id:      int
     kind_str_id:      int = 0
     default_txn_type: int = 0
+    # Pluggable-codec identity (impl-plan §2.1). Defaults select the legacy /
+    # built-in path: codec_id_str == 0 means "no explicit codec". These are
+    # only serialized via the length-prefixed TRL_TYPE_TAG_STREAM_V2 entry when
+    # a non-default codec is selected, so legacy streams are byte-unchanged.
+    codec_id_str:     int = 0     # string-table id of the reverse-DNS codec id
+    codec_version:    int = 0
+    params:           bytes = b""  # codec-private, opaque to the core
+    # Stream-type transparent metadata (impl-plan §2.3 sibling field / §2.6
+    # profiles): queryable codec-free. Each is a TypedAttr.
+    metadata:         list = field(default_factory=list)
+    # Dependency catalog (impl-plan §2.5 / design §4.4): input stream-type ids
+    # this stream's codec must have materialized first (derived/consumer codecs).
+    input_streams:    list = field(default_factory=list)
+
+    @property
+    def has_codec(self) -> bool:
+        return self.codec_id_str != 0
+
+    @property
+    def needs_v2(self) -> bool:
+        """A stream type needs the codec-aware V2 entry once it carries a codec,
+        transparent metadata, or input-stream dependencies; otherwise the legacy
+        entry is emitted."""
+        return self.has_codec or bool(self.metadata) or bool(self.input_streams)
 
 
 @dataclass
@@ -227,6 +285,7 @@ class HScope:
     src_line:         int = 0
     children:         list = field(default_factory=list)
     attrs:            list = field(default_factory=list)
+    typed_attrs:      list = field(default_factory=list)   # H_ATTR2 (§2.3)
 
 
 @dataclass
@@ -239,6 +298,7 @@ class HVar:
     src_file_str_id: int = 0
     src_line:        int = 0
     attrs:           list = field(default_factory=list)
+    typed_attrs:     list = field(default_factory=list)   # H_ATTR2 (§2.3)
 
 
 @dataclass
@@ -247,12 +307,27 @@ class HStream:
     stream_type_id: int
     name_str_id:    int
     attrs:          list = field(default_factory=list)
+    typed_attrs:    list = field(default_factory=list)   # H_ATTR2 (§2.3)
 
 
 @dataclass
 class HAttr:
     key_str_id:   int
     value_str_id: int
+
+
+@dataclass
+class TypedAttr:
+    """A transparent-metadata entry (impl-plan §2.3): a key plus a typed value.
+
+    ``attr_type`` is an :class:`AttrType` value. ``value`` is a Python ``bool``/
+    ``int``/``float``/``str`` for scalars, or a ``list`` of those for arrays. For
+    ``AT_STR`` (and arrays of it) the in-memory ``value`` is the *decoded string*
+    on read; on the wire it is a string-table id.
+    """
+    key_str_id: int
+    attr_type:  int
+    value:      object
 
 
 @dataclass
@@ -349,4 +424,10 @@ class WellKnownAttr:
     ORIGIN_FILE      = "trlog.origin.file"
     ORIGIN_LINE      = "trlog.origin.line"
     ORIGIN_COMPONENT = "trlog.origin.component"
+
+    # Profiles a stream type conforms to (impl-plan §2.6): a transparent
+    # array-of-string of reverse-DNS profile ids. Generalizes the single
+    # stream "kind". Purely descriptive at the trlog layer (matching lives
+    # above — design §4.6).
+    PROFILE = "trlog.profile"
 

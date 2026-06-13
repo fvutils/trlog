@@ -128,6 +128,12 @@ class HierarchyBlock:
             raise ZstFormatError("H_ATTR without any enclosing scope/var/stream")
         self._last_node.attrs.append(attr)
 
+    def add_typed_attr(self, attr) -> None:
+        """Attach a typed transparent attr (H_ATTR2, §2.3) to the last node."""
+        if self._last_node is None:
+            raise ZstFormatError("H_ATTR2 without any enclosing scope/var/stream")
+        self._last_node.typed_attrs.append(attr)
+
     # ------------------------------------------------------------------
     # Block serialisation
     # ------------------------------------------------------------------
@@ -205,6 +211,7 @@ class HierarchyBlock:
             out += encode_uvarint(node.src_line)
             for attr in node.attrs:
                 out += self._encode_attr(attr)
+            out += self._encode_typed_attrs(node)
             for child in node.children:
                 out += self._encode_node(child)
             out.append(HierTag.H_UPSCOPE)
@@ -219,6 +226,7 @@ class HierarchyBlock:
             out += encode_uvarint(node.src_line)
             for attr in node.attrs:
                 out += self._encode_attr(attr)
+            out += self._encode_typed_attrs(node)
         elif isinstance(node, HStream):
             out.append(HierTag.H_STREAM)
             out += encode_uvarint(node.stream_inst_id)
@@ -226,6 +234,15 @@ class HierarchyBlock:
             out += encode_uvarint(node.name_str_id)
             for attr in node.attrs:
                 out += self._encode_attr(attr)
+            out += self._encode_typed_attrs(node)
+        return bytes(out)
+
+    def _encode_typed_attrs(self, node) -> bytes:
+        from ._metadata import encode_typed_attr
+        out = bytearray()
+        for ta in getattr(node, "typed_attrs", ()):  # H_ATTR2 (§2.3)
+            out.append(HierTag.H_ATTR2)
+            out += encode_typed_attr(ta)
         return bytes(out)
 
     def _encode_attr(self, attr: HAttr) -> bytes:
@@ -331,6 +348,14 @@ class HierarchyBlock:
                     node.attrs.append(attr)
                 else:
                     node.attrs.append(attr)
+
+            elif tag == HierTag.H_ATTR2:
+                from ._metadata import decode_typed_attr
+                ta, offset = decode_typed_attr(data, offset)
+                node = last_node()
+                if node is None:
+                    raise ZstFormatError("H_ATTR2 without any enclosing node")
+                node.typed_attrs.append(ta)
             else:
                 # Unknown tag — stop (cannot know size)
                 break

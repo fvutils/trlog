@@ -37,7 +37,7 @@ class TxnDataBlock:
         start_time: int = 0,
         compress: bool = True,
         use_zstd: bool = False,
-        column_layout: str = "auto",
+        column_layout: str = "row",
     ) -> None:
         self.start_time = start_time
         self.end_time   = start_time

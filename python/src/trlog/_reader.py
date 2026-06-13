@@ -13,11 +13,17 @@ from ._string_table import StringTable
 from ._type_registry import TypeRegistry
 from ._types import (
     BlockType, SignalEncoding, BLOCK_HEADER_SIZE, FLAG_COMPRESSED, FLAG_COMPRESS_ALG,
-    VcChange, HStream,
+    FLAG_STRUCT_CODEC, VcChange, HStream, AttrType, WellKnownAttr,
 )
+from .codec import lookup_vc_codec as _lookup_vc_codec
+from ._metadata import MetaBlock
 from ._ext import ExtBlock
+from ._aux import AuxBlock
 from ._vc_data import VcDataBlock
 from ._txn_data import TxnDataBlock
+from .codec import (
+    Store, lookup_vc_codec, lookup_txn_codec, CORE_VALUECHANGE, CORE_RECORD,
+)
 
 TRL_MAGIC = b'TRL\x00\x00\x00\x01\x00'
 
@@ -44,6 +50,8 @@ class TrlReader:
         self._strtab = StringTable()
         self._typereg = TypeRegistry()
         self._hierarchies: Dict[int, HierarchyBlock] = {}
+        self._meta: Optional[MetaBlock] = None   # trace-global transparent metadata
+        self._derived_cache: Optional[Dict[int, dict]] = None
         self._index: Optional[IndexBlock] = None
         self._timescale_exp: int = -9
         self._timezero: int = 0
@@ -52,6 +60,13 @@ class TrlReader:
 
         # Sig type map: var_id → (SignalEncoding, bit_width) populated from type registry
         self._sig_types: Dict[int, tuple] = {}
+
+        # Codec SPI seam (design §4.3). Block decode is dispatched through the
+        # resolved codec; legacy blocks (no per-stream codec recorded) resolve
+        # to the re-homed core codecs.
+        self._store = Store(reader=self)
+        self._vc_codec = lookup_vc_codec(CORE_VALUECHANGE)
+        self._txn_codec = lookup_txn_codec(CORE_RECORD)
 
         self._scan_file()
 
@@ -92,9 +107,20 @@ class TrlReader:
         self._file.seek(0)
         for block_type, flags, payload, _offset in self._iter_raw_blocks():
             if block_type == BlockType.BLK_VC_DATA:
-                sig_types = self._build_sig_types()
-                blk = VcDataBlock(start_time=0, sig_types=sig_types)
-                yield blk.read_block(payload, flags=flags)
+                changes: List[VcChange] = []
+                if flags & FLAG_STRUCT_CODEC:
+                    # Self-identifying structural-codec block: resolve its codec
+                    # id from the interned prefix and dispatch; a block whose
+                    # codec is unavailable is skipped (never errors) — §2.4/§4.2.
+                    codec = self._resolve_block_codec(payload)
+                    if codec is None:
+                        continue
+                    codec.decode_block(None, self._store, payload, flags,
+                                       changes.append)
+                else:
+                    self._vc_codec.decode_block(None, self._store, payload, flags,
+                                                changes.append)
+                yield changes
 
     def iter_txn_blocks(
         self, stream_inst_id: Optional[int] = None
@@ -122,8 +148,9 @@ class TrlReader:
                 blk_type, flags, payload, _ = self._read_one_block()
                 if blk_type != BlockType.BLK_TXN_DATA:
                     continue
-                blk = TxnDataBlock(compress=False)
-                records = blk.read_block(payload, flags=flags, schemas=schemas)
+                records = []
+                self._txn_codec.decode_block(None, self._store, payload, flags,
+                                             records.append)
                 # The block *should* be single-stream, but if it was written
                 # as mixed we still need to filter at record level.
                 filtered = [
@@ -139,8 +166,9 @@ class TrlReader:
         self._file.seek(0)
         for block_type, flags, payload, _offset in self._iter_raw_blocks():
             if block_type == BlockType.BLK_TXN_DATA:
-                blk = TxnDataBlock(compress=False)
-                records = blk.read_block(payload, flags=flags, schemas=schemas)
+                records = []
+                self._txn_codec.decode_block(None, self._store, payload, flags,
+                                             records.append)
                 if stream_inst_id is not None:
                     records = [
                         r for r in records
@@ -261,6 +289,215 @@ class TrlReader:
         return result
 
     # ------------------------------------------------------------------
+    # Transparent-metadata query API (impl-plan §2.3 / §2.6) — codec-free
+    # ------------------------------------------------------------------
+
+    def _resolve_typed_attr(self, attr):
+        """Resolve a TypedAttr's wire form to Python values (string ids → text)."""
+        base = attr.attr_type & ~int(AttrType.AT_ARRAY)
+        if attr.attr_type & int(AttrType.AT_ARRAY):
+            if base == int(AttrType.AT_STR):
+                return [self._strtab.lookup(v) for v in attr.value]
+            return list(attr.value)
+        if base == int(AttrType.AT_STR):
+            return self._strtab.lookup(attr.value)
+        return attr.value
+
+    def _attrs_to_dict(self, attrs) -> Dict[str, object]:
+        out: Dict[str, object] = {}
+        for attr in attrs:
+            key = self._strtab.lookup(attr.key_str_id)
+            out[key] = self._resolve_typed_attr(attr)   # last-wins on conflict
+        return out
+
+    def trace_metadata(self) -> Dict[str, object]:
+        """Trace-global transparent metadata as ``{key: value}`` (resolved)."""
+        if self._meta is None:
+            return {}
+        return self._attrs_to_dict(self._meta.attrs)
+
+    def stream_metadata(self, stream_type_id: int) -> Dict[str, object]:
+        """Transparent metadata for a stream *type* as ``{key: value}``."""
+        decl = self._typereg.get_stream_decl(stream_type_id)
+        if decl is None:
+            return {}
+        return self._attrs_to_dict(decl.metadata)
+
+    def profiles(self, stream_type_id: int) -> List[str]:
+        """Reverse-DNS profile ids declared by a stream type (impl-plan §2.6)."""
+        meta = self.stream_metadata(stream_type_id)
+        val = meta.get(WellKnownAttr.PROFILE, [])
+        if isinstance(val, list):
+            return list(val)
+        return [val]
+
+    # ------------------------------------------------------------------
+    # Opaque keyed (aux) metadata (impl-plan §2.4)
+    # ------------------------------------------------------------------
+
+    def aux_entries(self, owner_stream_id: Optional[int] = None):
+        """Enumerate opaque keyed-block entries as
+        ``(owner_stream_id, key, ordinal, offset, length)`` — the codec-free
+        discovery surface (a reader lacking the codec can still list them)."""
+        if self._index is None:
+            return []
+        return self._index.aux_entries(owner_stream_id)
+
+    def aux_keys(self, owner_stream_id: int):
+        """Distinct keys present for an owner stream, in first-seen order."""
+        seen = []
+        for own, key, _ord, _off, _len in self.aux_entries(owner_stream_id):
+            if key not in seen:
+                seen.append(key)
+        return seen
+
+    def read_aux(self, owner_stream_id: int, key: int) -> List[bytes]:
+        """Return the decoded payloads for ``(owner_stream_id, key)`` in ordinal
+        order. The bytes are whatever the producing codec wrote (opaque here)."""
+        if self._index is None:
+            return []
+        out: List[bytes] = []
+        for _ord, off, _len in self._index.find_aux(owner_stream_id, key):
+            self._file.seek(off)
+            _btype, flags, payload, _ = self._read_one_block()
+            out.append(AuxBlock.decode(payload, flags=flags))
+        return out
+
+    # ------------------------------------------------------------------
+    # Structural codecs on value-change blocks (impl-plan §2.2, §4.2)
+    # ------------------------------------------------------------------
+
+    def _block_codec_id(self, payload) -> Optional[str]:
+        """Resolve the codec-id string of a FLAG_STRUCT_CODEC block from its
+        interned prefix (``uvarint codec_id_str``), without decoding it."""
+        try:
+            cid, _ = decode_uvarint(payload, 0)
+            return self._strtab.lookup(cid)
+        except (KeyError, IndexError, ValueError):
+            return None
+
+    def _resolve_block_codec(self, payload):
+        cid = self._block_codec_id(payload)
+        return _lookup_vc_codec(cid) if cid is not None else None
+
+    def vc_block_report(self):
+        """Enumerate every value-change block as
+        ``{codec, available, start, end}`` *without decoding payloads* — the
+        skip-unknown discovery surface (§4.2). ``codec`` is ``None`` for the
+        default core path; ``available`` is False when a structural codec is not
+        registered, and the reader skips such blocks rather than erroring."""
+        # Map block file offset -> (start, end) from the index, if present.
+        ranges = {}
+        if self._index is not None:
+            for s, e, off in self._index._vc_entries:
+                ranges[off] = (s, e)
+        report = []
+        self._file.seek(0)
+        for block_type, flags, payload, offset in self._iter_raw_blocks():
+            if block_type != BlockType.BLK_VC_DATA:
+                continue
+            s, e = ranges.get(offset, (None, None))
+            if flags & FLAG_STRUCT_CODEC:
+                cid = self._block_codec_id(payload)
+                report.append({
+                    "codec": cid,
+                    "available": _lookup_vc_codec(cid) is not None,
+                    "start": s, "end": e,
+                })
+            else:
+                report.append({"codec": None, "available": True,
+                               "start": s, "end": e})
+        return report
+
+    def missing_codecs(self):
+        """Sorted distinct codec ids referenced by blocks but not registered."""
+        return sorted({r["codec"] for r in self.vc_block_report()
+                       if r["codec"] is not None and not r["available"]})
+
+    # ------------------------------------------------------------------
+    # Stream dependency resolution (impl-plan §2.5 / design §4.4)
+    # ------------------------------------------------------------------
+
+    def dependency_catalog(self) -> Dict[int, List[int]]:
+        """Return ``{stream_type_id: [input_stream_type_id, ...]}``."""
+        return self._typereg.dependency_catalog()
+
+    def dependencies(self, stream_type_id: int) -> List[int]:
+        """Input stream types a stream type's codec depends on."""
+        decl = self._typereg.get_stream_decl(stream_type_id)
+        return list(decl.input_streams) if decl is not None else []
+
+    def dependency_graph(self):
+        """Build the stream :class:`DependencyGraph` from the persisted catalog
+        (defensively validated for cycles by callers that order/materialize)."""
+        from ._deps import DependencyGraph
+        return DependencyGraph.from_catalog(self.dependency_catalog())
+
+    def dependency_order(self) -> List[int]:
+        """Topological decode order: inputs before the streams that consume
+        them. Raises ``DependencyError`` if the on-disk catalog has a cycle."""
+        return self.dependency_graph().topo_order()
+
+    def materializer(self, compute):
+        """Return a lazy, memoized :class:`Materializer` over the dependency
+        graph. ``compute(stream_id, materialized_inputs)`` is called at most once
+        per stream, only when first requested, with its inputs already done."""
+        from ._deps import Materializer
+        return Materializer(self.dependency_graph(), compute)
+
+    # ------------------------------------------------------------------
+    # Derived (virtual) signals (impl-plan §4 / design §5.2)
+    # ------------------------------------------------------------------
+
+    def derived_signals(self) -> Dict[int, dict]:
+        """Map ``derived_var_id -> {name, bit_width, inputs, materialized, def}``
+        for every derived signal stored in the trace (read codec-free from the
+        aux catalog)."""
+        if self._derived_cache is not None:
+            return self._derived_cache
+        from ._derived import DerivedDef, DERIVED_AUX_OWNER
+        out: Dict[int, dict] = {}
+        for own, key, _ordn, _off, _ln in self.aux_entries(DERIVED_AUX_OWNER):
+            payloads = self.read_aux(own, key)
+            if not payloads:
+                continue
+            payload = payloads[0]
+            name_id, o = decode_uvarint(payload, 0)
+            defn = DerivedDef.decode(payload[o:])
+            out[key] = {
+                "name": self._strtab.lookup(name_id),
+                "bit_width": defn.bit_width,
+                "inputs": list(defn.input_var_ids),
+                "materialized": defn.materialized,
+                "def": defn,
+            }
+        self._derived_cache = out
+        return out
+
+    def read_derived(self, var_id: int) -> List[VcChange]:
+        """Evaluate a derived signal, returning its value-change list. Evaluation
+        is **lazy** (computed only on this call) and **memoized** across the
+        dependency graph; inputs (base or derived) are materialized first, in
+        topological order, with read-time cycle defense (design §4.4)."""
+        from ._derived import evaluate_changes
+        from ._deps import DependencyGraph, Materializer
+        defs = self.derived_signals()
+        if var_id not in defs:
+            raise KeyError(f"no derived signal with var id {var_id}")
+        catalog = {vid: info["inputs"] for vid, info in defs.items()}
+        graph = DependencyGraph.from_catalog(catalog)
+
+        def compute(node, inputs):
+            if node in defs:
+                defn = defs[node]["def"]
+                return evaluate_changes(defn, [inputs[i] for i in defn.input_var_ids])
+            # base signal: read its raw changes
+            return [(c.time, c.value) for c in self.read_signal(node)]
+
+        changes = Materializer(graph, compute).materialize(var_id)
+        return [VcChange(var_id=var_id, time=t, value=v) for t, v in changes]
+
+    # ------------------------------------------------------------------
     # Internal scan
     # ------------------------------------------------------------------
 
@@ -307,11 +544,17 @@ class TrlReader:
             self._file.seek(self._index.typereg_offset)
             _, tflags, tpayload, _ = self._read_one_block()
             self._typereg.read_block(tpayload, flags=tflags)
+
+            if self._index.meta_offset:
+                self._file.seek(self._index.meta_offset)
+                _, mflags, mpayload, _ = self._read_one_block()
+                self._meta = MetaBlock()
+                self._meta.read_block(mpayload, flags=mflags)
         else:
             # Slow path: linear scan, but skip data-block payloads entirely
             self._file.seek(0)
             skip = {BlockType.BLK_VC_DATA, BlockType.BLK_TXN_DATA, BlockType.BLK_EXT,
-                    BlockType.BLK_INDEX}
+                    BlockType.BLK_AUX, BlockType.BLK_INDEX}
             for block_type, flags, payload, _ in self._iter_raw_blocks(skip_types=skip):
                 if payload is None:
                     continue
@@ -323,6 +566,9 @@ class TrlReader:
                     blk = HierarchyBlock()
                     blk.read_block(payload, flags=flags)
                     self._hierarchies[blk.hier_id] = blk
+                elif block_type == BlockType.BLK_META:
+                    self._meta = MetaBlock()
+                    self._meta.read_block(payload, flags=flags)
 
     def _parse_file_header(self, payload: bytes) -> None:
         off = 0
