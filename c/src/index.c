@@ -43,14 +43,14 @@ trl_status_t trl_index_add_hier_offset(trl_index_t *idx, uint64_t offset) {
 trl_status_t trl_index_add_vc(trl_index_t *idx, uint64_t start, uint64_t end, uint64_t offset) {
     trl_status_t st = trl_index_ensure(&idx->vc_entries, &idx->vc_cap, idx->vc_count + 1);
     if (st != TRL_OK) return st;
-    idx->vc_entries[idx->vc_count++] = (trl_index_entry_t){start, end, offset};
+    idx->vc_entries[idx->vc_count++] = (trl_index_entry_t){start, end, offset, TRL_STREAM_MIXED};
     return TRL_OK;
 }
 
-trl_status_t trl_index_add_txn(trl_index_t *idx, uint64_t start, uint64_t end, uint64_t offset) {
+trl_status_t trl_index_add_txn(trl_index_t *idx, uint64_t start, uint64_t end, uint64_t offset, uint32_t stream_inst_id) {
     trl_status_t st = trl_index_ensure(&idx->txn_entries, &idx->txn_cap, idx->txn_count + 1);
     if (st != TRL_OK) return st;
-    idx->txn_entries[idx->txn_count++] = (trl_index_entry_t){start, end, offset};
+    idx->txn_entries[idx->txn_count++] = (trl_index_entry_t){start, end, offset, stream_inst_id};
     return TRL_OK;
 }
 
@@ -80,6 +80,22 @@ trl_status_t trl_index_encode_block(const trl_index_t *idx, trl_buf_t *out) {
     if (st == TRL_OK) st = trl_buf_append_uvarint(&payload, idx->hier_count);
     for (size_t i = 0; st == TRL_OK && i < idx->hier_count; ++i)
         st = trl_buf_append_le64(&payload, idx->hier_offsets[i]);
+    /* Per-stream txn index section (sentinel 0x02). Written only when some
+     * entry has a real stream id, as the Python reference does, so files
+     * without per-stream blocks stay byte-identical. */
+    bool has_stream_ids = false;
+    for (size_t i = 0; i < idx->txn_count; ++i)
+        if (idx->txn_entries[i].stream_inst_id != TRL_STREAM_MIXED) { has_stream_ids = true; break; }
+    if (has_stream_ids) {
+        if (st == TRL_OK) st = trl_buf_append_u8(&payload, 0x02);
+        if (st == TRL_OK) st = trl_buf_append_uvarint(&payload, idx->txn_count);
+        for (size_t i = 0; st == TRL_OK && i < idx->txn_count; ++i) {
+            st = trl_buf_append_uvarint(&payload, idx->txn_entries[i].stream_inst_id);
+            if (st == TRL_OK) st = trl_buf_append_le64(&payload, idx->txn_entries[i].start);
+            if (st == TRL_OK) st = trl_buf_append_le64(&payload, idx->txn_entries[i].end);
+            if (st == TRL_OK) st = trl_buf_append_le64(&payload, idx->txn_entries[i].offset);
+        }
+    }
     if (st == TRL_OK) st = trl_make_block(TRL_BLK_INDEX, 0, payload.data, payload.size, out);
     trl_buf_free(&payload);
     return st;
@@ -98,7 +114,7 @@ trl_status_t trl_index_decode_payload(trl_index_t *idx, const uint8_t *payload, 
     st = trl_decode_uvarint(payload, payload_len, &offset, &count);
     for (uint64_t i = 0; st == TRL_OK && i < count; ++i) {
         if (offset + 24 > payload_len) return TRL_ERR_CORRUPT;
-        st = trl_index_add_txn(idx, trl_read_le64(payload + offset), trl_read_le64(payload + offset + 8), trl_read_le64(payload + offset + 16));
+        st = trl_index_add_txn(idx, trl_read_le64(payload + offset), trl_read_le64(payload + offset + 8), trl_read_le64(payload + offset + 16), TRL_STREAM_MIXED);
         offset += 24;
     }
     if (st != TRL_OK) return st;
@@ -127,6 +143,23 @@ trl_status_t trl_index_decode_payload(trl_index_t *idx, const uint8_t *payload, 
             if (offset + 8 > payload_len) return TRL_ERR_CORRUPT;
             st = trl_index_add_hier_offset(idx, trl_read_le64(payload + offset));
             offset += 8;
+        }
+    }
+    /* Per-stream txn index section (sentinel 0x02): same entries as the basic
+     * list, each with its stream id. It replaces the basic entries. */
+    if (st == TRL_OK && offset < payload_len && payload[offset] == 0x02) {
+        offset += 1;
+        uint64_t scount = 0;
+        st = trl_decode_uvarint(payload, payload_len, &offset, &scount);
+        if (st == TRL_OK && scount) idx->txn_count = 0;
+        for (uint64_t i = 0; st == TRL_OK && i < scount; ++i) {
+            uint64_t sid = 0;
+            st = trl_decode_uvarint(payload, payload_len, &offset, &sid);
+            if (st != TRL_OK) break;
+            if (offset + 24 > payload_len) return TRL_ERR_CORRUPT;
+            st = trl_index_add_txn(idx, trl_read_le64(payload + offset), trl_read_le64(payload + offset + 8),
+                                   trl_read_le64(payload + offset + 16), (uint32_t)sid);
+            offset += 24;
         }
     }
     return st;

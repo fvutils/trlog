@@ -80,6 +80,7 @@ class FieldType(enum.IntEnum):
     FT_BYTES  = 0x0D
     FT_TIME   = 0x0E
     FT_ENUM   = 0x0F
+    FT_LOGICVEC = 0x10   # 4-state vector: (width, aval, bval)
 
 
 class TxnRecordTag(enum.IntEnum):

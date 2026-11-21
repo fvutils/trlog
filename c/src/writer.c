@@ -118,6 +118,10 @@ uint32_t trl_hier_add_var(trl_writer_t *w, uint32_t name_id, uint32_t sig_type_i
     return var_id;
 }
 
+uint32_t trl_hier_add_stream(trl_writer_t *w, uint32_t stream_type_id, uint32_t name_id) {
+    return trl_hierarchy_add_stream(&w->hierarchy, stream_type_id, name_id);
+}
+
 trl_status_t trl_flush_hierarchy(trl_writer_t *w) {
     trl_buf_t block; trl_buf_init(&block);
     trl_status_t st = trl_hierarchy_encode_block(&w->hierarchy, w->compress, &block);
@@ -170,12 +174,20 @@ trl_status_t trl_vc_flush(trl_writer_t *w) {
 }
 
 trl_status_t trl_txn_begin_block(trl_writer_t *w, uint64_t start_time) {
+    return trl_txn_begin_block_stream(w, start_time, TRL_STREAM_MIXED);
+}
+
+trl_status_t trl_txn_begin_block_stream(trl_writer_t *w, uint64_t start_time, uint32_t stream_inst_id) {
     w->txn_active = true;
-    return w->status = trl_txn_block_begin(&w->txn, start_time);
+    return w->status = trl_txn_block_begin(&w->txn, start_time, stream_inst_id);
 }
 
 trl_status_t trl_txn_full(trl_writer_t *w, uint32_t stream_inst_id, uint32_t txn_type_id, uint64_t txn_id, uint64_t start, uint64_t end, uint64_t parent, uint32_t attr_count, const trl_attr_t *attrs) {
     return w->status = trl_txn_block_add_full(&w->txn, stream_inst_id, txn_type_id, txn_id, start, end, parent, attr_count, attrs);
+}
+
+trl_status_t trl_txn_meta(trl_writer_t *w, uint64_t txn_id, uint32_t key_str_id, uint32_t value_str_id) {
+    return w->status = trl_txn_block_add_meta(&w->txn, txn_id, key_str_id, value_str_id);
 }
 
 trl_status_t trl_txn_end_block(trl_writer_t *w) {
@@ -186,7 +198,8 @@ trl_status_t trl_txn_end_block(trl_writer_t *w) {
     trl_store store = { .writer = w, .reader = NULL };
     trl_blkout out = { .buf = &block };
     trl_status_t st = codec->encode_block(NULL, &store, &out) == 0 ? TRL_OK : TRL_ERR_IO;
-    if (st == TRL_OK) st = trl_index_add_txn(&w->index, w->txn.start_time, w->txn.end_time, (uint64_t)off);
+    if (st == TRL_OK) st = trl_index_add_txn(&w->index, w->txn.start_time, w->txn.end_time, (uint64_t)off,
+                                                   w->txn.stream_inst_id);
     if (st == TRL_OK) st = trl_writer_write_buf(w, &block);
     else trl_buf_free(&block);
     w->txn_active = false;

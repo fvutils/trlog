@@ -84,6 +84,23 @@ uint32_t trl_hierarchy_add_var(trl_hierarchy_t *hier, uint32_t name_id, uint32_t
     return var_id;
 }
 
+uint32_t trl_hierarchy_add_stream(trl_hierarchy_t *hier, uint32_t stream_type_id, uint32_t name_id) {
+    uint32_t inst_id = hier->next_stream_id++;
+    if (trl_hierarchy_add_stream_explicit(hier, inst_id, stream_type_id, name_id) != TRL_OK) {
+        return 0;
+    }
+    return inst_id;
+}
+
+trl_status_t trl_hierarchy_add_stream_explicit(trl_hierarchy_t *hier, uint32_t stream_inst_id,
+                                               uint32_t stream_type_id, uint32_t name_id) {
+    trl_status_t st = trl_buf_append_u8(&hier->body, TRL_H_STREAM);
+    if (st == TRL_OK) st = trl_buf_append_uvarint(&hier->body, stream_inst_id);
+    if (st == TRL_OK) st = trl_buf_append_uvarint(&hier->body, stream_type_id);
+    if (st == TRL_OK) st = trl_buf_append_uvarint(&hier->body, name_id);
+    return st;
+}
+
 trl_status_t trl_hierarchy_encode_block(const trl_hierarchy_t *hier, trl_compress_t compress, trl_buf_t *out) {
     trl_status_t st;
     trl_buf_t inner;
@@ -190,6 +207,83 @@ trl_status_t trl_hierarchy_decode_payload(const uint8_t *payload, size_t payload
         } else if (tag == TRL_H_ATTR) {
             if ((st = trl_decode_uvarint(data, len, &offset, &tmp)) != TRL_OK) break;
             if ((st = trl_decode_uvarint(data, len, &offset, &tmp)) != TRL_OK) break;
+        } else {
+            break;
+        }
+    }
+    free(owned);
+    return st;
+}
+
+trl_status_t trl_hierarchy_decode_streams(const uint8_t *payload, size_t payload_len, uint8_t flags,
+                                          trl_hier_stream_entry_t **out, size_t *out_count, size_t *out_cap) {
+    trl_status_t st = TRL_OK;
+    const uint8_t *data = payload;
+    size_t len = payload_len;
+    uint8_t *owned = NULL;
+    size_t offset = 0;
+    uint64_t tmp = 0;
+    int scope_depth = 0;
+
+    if (flags & TRL_FLAG_COMPRESSED) {
+        if (payload_len < 8) {
+            return TRL_ERR_CORRUPT;
+        }
+        uint64_t out_len = trl_read_le64(payload);
+        owned = (uint8_t *)malloc((size_t)out_len);
+        if (!owned) {
+            return TRL_ERR_OOM;
+        }
+        st = trl_zlib_uncompress_buf(payload + 8, payload_len - 8, owned, (size_t)out_len);
+        if (st != TRL_OK) {
+            free(owned);
+            return st;
+        }
+        data = owned;
+        len = (size_t)out_len;
+    }
+
+    /* hier_id, kind, name_id — not needed by this caller (the qualified path
+     * is already baked into each stream's own name_id). */
+    st = trl_decode_uvarint(data, len, &offset, &tmp);
+    if (st == TRL_OK && offset < len) {
+        offset++;
+    }
+    if (st == TRL_OK) {
+        st = trl_decode_uvarint(data, len, &offset, &tmp);
+    }
+    while (st == TRL_OK && offset < len) {
+        uint8_t tag = data[offset++];
+        if (tag == TRL_H_SCOPE) {
+            scope_depth++;
+            for (int i = 0; st == TRL_OK && i < 4; ++i) st = trl_decode_uvarint(data, len, &offset, &tmp);
+        } else if (tag == TRL_H_UPSCOPE) {
+            if (scope_depth <= 0) { st = TRL_ERR_CORRUPT; break; }
+            scope_depth--;
+        } else if (tag == TRL_H_VAR) {
+            for (int i = 0; st == TRL_OK && i < 2; ++i) st = trl_decode_uvarint(data, len, &offset, &tmp);
+            if (st == TRL_OK) {
+                if (offset >= len) { st = TRL_ERR_CORRUPT; break; }
+                offset++;
+            }
+            for (int i = 0; st == TRL_OK && i < 3; ++i) st = trl_decode_uvarint(data, len, &offset, &tmp);
+        } else if (tag == TRL_H_STREAM) {
+            uint64_t stream_inst_id = 0, stream_type_id = 0, name_id = 0;
+            if ((st = trl_decode_uvarint(data, len, &offset, &stream_inst_id)) != TRL_OK) break;
+            if ((st = trl_decode_uvarint(data, len, &offset, &stream_type_id)) != TRL_OK) break;
+            if ((st = trl_decode_uvarint(data, len, &offset, &name_id)) != TRL_OK) break;
+            if (*out_count >= *out_cap) {
+                size_t new_cap = *out_cap ? *out_cap * 2 : 8;
+                trl_hier_stream_entry_t *n = (trl_hier_stream_entry_t *)realloc(*out, new_cap * sizeof(**out));
+                if (!n) { st = TRL_ERR_OOM; break; }
+                *out = n;
+                *out_cap = new_cap;
+            }
+            (*out)[(*out_count)++] = (trl_hier_stream_entry_t){
+                (uint32_t)stream_inst_id, (uint32_t)stream_type_id, (uint32_t)name_id
+            };
+        } else if (tag == TRL_H_ATTR) {
+            for (int i = 0; st == TRL_OK && i < 2; ++i) st = trl_decode_uvarint(data, len, &offset, &tmp);
         } else {
             break;
         }

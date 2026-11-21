@@ -214,6 +214,55 @@ def _txn_schema_attrs(W, path):
                 )
 
 
+# One field per wire field type, in FieldType order. Values chosen to exercise
+# sign extension, multi-byte uvarints, non-byte-aligned vectors and X/Z bits.
+# c/tests/test_golden.c builds the same trace and must match it byte-for-byte.
+TXN_FIELD_KINDS = [
+    ("u8",    FieldType.FT_U8,       [0xAB, 0]),
+    ("u16",   FieldType.FT_U16,      [0xBEEF, 1]),
+    ("u32",   FieldType.FT_U32,      [0xDEADBEEF, 2]),
+    ("u64",   FieldType.FT_U64,      [0x0123456789ABCDEF, 3]),
+    ("i8",    FieldType.FT_I8,       [-5, 127]),
+    ("i16",   FieldType.FT_I16,      [-300, 300]),
+    ("i32",   FieldType.FT_I32,      [-70000, 70000]),
+    ("i64",   FieldType.FT_I64,      [-(1 << 40), 1 << 40]),
+    ("f32",   FieldType.FT_F32,      [1.5, -0.25]),
+    ("f64",   FieldType.FT_F64,      [3.141592653589793, -1e-300]),
+    ("flag",  FieldType.FT_BOOL,     [True, False]),
+    ("name",  FieldType.FT_STRING,   ["r\u00e9ad", ""]),
+    ("wide",  FieldType.FT_BITVEC,   [(70, (1 << 69) | 0x5A5A), (1, 1)]),
+    ("blob",  FieldType.FT_BYTES,    [b"\x00\x01\xff", b""]),
+    ("when",  FieldType.FT_TIME,     [123456789, 0]),
+    ("state", FieldType.FT_ENUM,     [3, 300]),
+    ("bus",   FieldType.FT_LOGICVEC, [(5, 0b10110, 0b00011), (12, 0xABC, 0)]),
+]
+
+
+@_entry("txn_field_kinds", caps=[CAP_TXN],
+        doc="Every FT_* kind as a txn attr, in a mixed and a per-stream block.")
+def _txn_field_kinds(W, path):
+    with W(path, compress=False) as w:
+        fields = [FieldDef(name_str_id=w.intern(n), field_type=ft)
+                  for n, ft, _ in TXN_FIELD_KINDS]
+        t = w.add_txn_schema("Kinds", fields)
+
+        def attrs(k):
+            return [TxnAttr(field_idx=i, value=vals[k])
+                    for i, (_, _, vals) in enumerate(TXN_FIELD_KINDS)]
+
+        with w.begin_txn_block(0) as txn:
+            txn.write_full(stream_inst_id=1, txn_type_id=t, txn_id=1,
+                           start=0, end=10, parent=0, attrs=attrs(0))
+            txn.write_full(stream_inst_id=2, txn_type_id=t, txn_id=2,
+                           start=5, end=20, parent=1, attrs=attrs(1))
+        with w.begin_txn_block(20, stream_inst_id=2) as txn:
+            txn.write_full(stream_inst_id=2, txn_type_id=t, txn_id=3,
+                           start=20, end=25, parent=0, attrs=attrs(0))
+            txn.write_full(stream_inst_id=2, txn_type_id=t, txn_id=4,
+                           start=30, end=30, parent=0,
+                           attrs=[TxnAttr(field_idx=15, value=7)])
+
+
 @_entry("txn_column", caps=[CAP_TXN, CAP_COLUMN, CAP_COMPRESS],
         doc="Transaction stream, column layout + compression.")
 def _txn_column(W, path):

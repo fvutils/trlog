@@ -66,6 +66,17 @@ class TestPerStreamIndex:
         offsets = idx.find_txn_blocks_for_stream(1, start=50, end=150)
         assert offsets == [0x1000, 0x2000]
 
+    def test_find_for_stream_includes_mixed_blocks(self):
+        """Mixed (0xFFFFFFFF) entries are always candidates, even when other
+        entries carry real stream ids."""
+        idx = IndexBlock()
+        idx.add_txn_entry(0, 99, 0x1000, stream_inst_id=1)
+        idx.add_txn_entry(100, 199, 0x2000)            # mixed
+        idx.add_txn_entry(200, 299, 0x3000, stream_inst_id=2)
+        assert idx.find_txn_blocks_for_stream(1) == [0x1000, 0x2000]
+        assert idx.find_txn_blocks_for_stream(2) == [0x2000, 0x3000]
+        assert idx.find_txn_blocks_for_stream(1, start=200) == []
+
     def test_find_txn_blocks_unfiltered_still_works(self):
         """find_txn_blocks (no stream filter) returns all entries."""
         idx = IndexBlock()

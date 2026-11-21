@@ -19,12 +19,21 @@ class _FieldDef(ctypes.Structure):
     ]
 
 
+class _AttrVec(ctypes.Structure):
+    _fields_ = [
+        ("data", ctypes.POINTER(ctypes.c_uint8)),
+        ("len", ctypes.c_uint32),
+        ("width", ctypes.c_uint32),
+    ]
+
+
 class _AttrValue(ctypes.Union):
     _fields_ = [
         ("u64", ctypes.c_uint64),
         ("i64", ctypes.c_int64),
         ("f64", ctypes.c_double),
         ("str", ctypes.c_char_p),
+        ("vec", _AttrVec),
     ]
 
 
@@ -94,6 +103,8 @@ if _LIB is not None:
     _LIB.trl_vc_flush.restype = ctypes.c_int
     _LIB.trl_txn_begin_block.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
     _LIB.trl_txn_begin_block.restype = ctypes.c_int
+    _LIB.trl_txn_begin_block_stream.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32]
+    _LIB.trl_txn_begin_block_stream.restype = ctypes.c_int
     _LIB.trl_txn_full.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint32, ctypes.POINTER(_Attr)]
     _LIB.trl_txn_full.restype = ctypes.c_int
     _LIB.trl_txn_end_block.argtypes = [ctypes.c_void_p]
@@ -224,9 +235,10 @@ class _VcContext:
 
 
 class _TxnContext:
-    def __init__(self, writer: "_CtypesWriter", start_time: int):
+    def __init__(self, writer: "_CtypesWriter", start_time: int, stream_inst_id=None):
         self._writer = writer
-        writer._check(_LIB.trl_txn_begin_block(writer._handle, start_time))
+        sid = 0xFFFFFFFF if stream_inst_id is None else int(stream_inst_id)
+        writer._check(_LIB.trl_txn_begin_block_stream(writer._handle, start_time, sid))
 
     def write_full(self, stream_inst_id, txn_type_id, txn_id, start, end, parent=0, attrs=None):
         attrs = list(attrs or [])
@@ -250,6 +262,21 @@ class _TxnContext:
                 arr[i].value.i64 = int(attr.value)
             elif ft in (int(FieldType.FT_F32), int(FieldType.FT_F64)):
                 arr[i].value.f64 = float(attr.value)
+            elif ft in (int(FieldType.FT_BYTES), int(FieldType.FT_BITVEC), int(FieldType.FT_LOGICVEC)):
+                if ft == int(FieldType.FT_BYTES):
+                    raw, width = bytes(attr.value), 0
+                elif ft == int(FieldType.FT_BITVEC):
+                    width, val = attr.value
+                    raw = int(val).to_bytes((width + 7) // 8, "big")
+                else:
+                    width, aval, bval = attr.value
+                    nbytes = (width + 7) // 8
+                    raw = int(aval).to_bytes(nbytes, "big") + int(bval).to_bytes(nbytes, "big")
+                buf = (ctypes.c_uint8 * max(len(raw), 1)).from_buffer_copy(raw or b"\0")
+                backing.append(buf)
+                arr[i].value.vec.data = ctypes.cast(buf, ctypes.POINTER(ctypes.c_uint8))
+                arr[i].value.vec.len = len(raw)
+                arr[i].value.vec.width = int(width)
             else:
                 arr[i].value.u64 = int(attr.value)
         self._writer._check(_LIB.trl_txn_full(self._writer._handle, stream_inst_id, txn_type_id, txn_id, start, end, parent, len(attrs), arr if attrs else None))
@@ -325,8 +352,8 @@ class _CtypesWriter:
         self._last_vc_start = start_time
         return _VcContext(self, start_time)
 
-    def begin_txn_block(self, start_time: int):
-        return _TxnContext(self, start_time)
+    def begin_txn_block(self, start_time: int, stream_inst_id=None):
+        return _TxnContext(self, start_time, stream_inst_id)
 
     def close(self) -> None:
         if not self._closed:

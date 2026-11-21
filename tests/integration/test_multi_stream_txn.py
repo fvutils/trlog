@@ -131,6 +131,36 @@ class TestSeparateStreamBlocks:
             assert all(rec.stream_inst_id == s1 for rec in s1_recs)
 
 
+    def test_per_stream_and_mixed_blocks(self, tmp_path):
+        """A file holding both per-stream and mixed blocks: a filtered read
+        must still see the stream's records in the mixed block (sv_api_design
+        §11.5)."""
+        p = tmp_path / "t.trl"
+        with TrlWriter(str(p), compress=False) as w:
+            schema = w.add_txn_schema("evt", [])
+            st = w.add_stream_type("s")
+            with w.begin_hierarchy(kind=HierKind.HK_BEHAVIORAL, name="h") as h:
+                h.begin_scope(ScopeType.ST_MODULE, "top")
+                s1 = h.add_stream(st, "a")
+                s2 = h.add_stream(st, "b")
+                h.end_scope()
+
+            with w.begin_txn_block(0, stream_inst_id=s1) as blk:
+                blk.write_full(s1, schema, 1, 0, 10, 0)
+            with w.begin_txn_block(10) as blk:
+                blk.write_full(s1, schema, 2, 10, 20, 0)
+                blk.write_full(s2, schema, 3, 10, 20, 0)
+            with w.begin_txn_block(20, stream_inst_id=s2) as blk:
+                blk.write_full(s2, schema, 4, 20, 30, 0)
+
+        with TrlReader(str(p)) as r:
+            s1_recs = [rec for blk in r.iter_txn_blocks(stream_inst_id=s1)
+                       for rec in blk]
+            s2_recs = [rec for blk in r.iter_txn_blocks(stream_inst_id=s2)
+                       for rec in blk]
+        assert sorted(rec.txn_id for rec in s1_recs) == [1, 2]
+        assert sorted(rec.txn_id for rec in s2_recs) == [3, 4]
+
 class TestStreamDiscovery:
     """Tests for find_streams() and hierarchy-based stream relationships."""
 

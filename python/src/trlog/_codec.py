@@ -122,6 +122,13 @@ def encode_field(ft: FieldType, value: Any) -> bytes:
     if ft == FieldType.FT_ENUM:
         return encode_uvarint(value)
 
+    if ft == FieldType.FT_LOGICVEC:
+        # value is (bit_width, aval, bval); aval then bval, big-endian like FT_BITVEC
+        bit_width, aval, bval = value
+        nbytes = (bit_width + 7) // 8
+        return (encode_uvarint(bit_width) + aval.to_bytes(nbytes, 'big')
+                + bval.to_bytes(nbytes, 'big'))
+
     raise ValueError(f"Unknown FieldType: {ft!r}")
 
 
@@ -160,5 +167,13 @@ def decode_field(ft: FieldType, buf: Buffer, offset: int = 0) -> Tuple[Any, int]
 
     if ft == FieldType.FT_ENUM:
         return decode_uvarint(buf, offset)
+
+    if ft == FieldType.FT_LOGICVEC:
+        bit_width, offset = decode_uvarint(buf, offset)
+        nbytes = (bit_width + 7) // 8
+        aval = int.from_bytes(bytes(buf[offset:offset + nbytes]), 'big')
+        offset += nbytes
+        bval = int.from_bytes(bytes(buf[offset:offset + nbytes]), 'big')
+        return (bit_width, aval, bval), offset + nbytes
 
     raise ValueError(f"Unknown FieldType: {ft!r}")

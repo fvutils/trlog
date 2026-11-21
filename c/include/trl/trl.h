@@ -12,7 +12,8 @@ typedef enum {
     TRL_ERR_VERSION,
     TRL_ERR_COMPRESS,
     TRL_ERR_CORRUPT,
-    TRL_ERR_OOM
+    TRL_ERR_OOM,
+    TRL_ERR_INVALID
 } trl_status_t;
 
 typedef enum {
@@ -28,20 +29,26 @@ typedef enum {
     TRL_SE_STRING = 4
 } trl_signal_enc_t;
 
+/* Field type codes. These are wire values and must match the Python reference
+ * (trlog._types.FieldType). */
 typedef enum {
-    TRL_FT_U8 = 0,
-    TRL_FT_U16,
-    TRL_FT_U32,
-    TRL_FT_U64,
-    TRL_FT_I8,
-    TRL_FT_I16,
-    TRL_FT_I32,
-    TRL_FT_I64,
-    TRL_FT_F32,
-    TRL_FT_F64,
-    TRL_FT_BOOL,
-    TRL_FT_STRING,
-    TRL_FT_ENUM
+    TRL_FT_U8       = 0x00,
+    TRL_FT_U16      = 0x01,
+    TRL_FT_U32      = 0x02,
+    TRL_FT_U64      = 0x03,
+    TRL_FT_I8       = 0x04,
+    TRL_FT_I16      = 0x05,
+    TRL_FT_I32      = 0x06,
+    TRL_FT_I64      = 0x07,
+    TRL_FT_F32      = 0x08,
+    TRL_FT_F64      = 0x09,
+    TRL_FT_BOOL     = 0x0A,
+    TRL_FT_STRING   = 0x0B,
+    TRL_FT_BITVEC   = 0x0C,
+    TRL_FT_BYTES    = 0x0D,
+    TRL_FT_TIME     = 0x0E,
+    TRL_FT_ENUM     = 0x0F,
+    TRL_FT_LOGICVEC = 0x10
 } trl_field_type_t;
 
 /* Transaction record tags */
@@ -59,6 +66,19 @@ typedef struct {
     trl_field_type_t field_type;
 } trl_field_def_t;
 
+/* One attribute value. Every pointer is read during the call that receives
+ * the attribute (trl_txn_full) and the value is copied; the caller's memory
+ * need not outlive that call.
+ *
+ *   u64       U8..U64, BOOL, TIME, ENUM
+ *   i64       I8..I64
+ *   f64       F32, F64
+ *   str       STRING (NUL-terminated UTF-8; NULL is the empty string)
+ *   vec       BYTES:    data[len]
+ *             BITVEC:   width bits; data[ceil(width/8)], big-endian
+ *             LOGICVEC: width bits; data holds aval[ceil(width/8)] then
+ *                       bval[ceil(width/8)], each big-endian
+ */
 typedef struct {
     uint32_t field_idx;
     trl_field_type_t field_type;
@@ -67,8 +87,16 @@ typedef struct {
         int64_t i64;
         double f64;
         const char *str;
+        struct {
+            const uint8_t *data;
+            uint32_t len;
+            uint32_t width;
+        } vec;
     } value;
 } trl_attr_t;
+
+/* stream_inst_id of a transaction block that may hold any stream's records */
+#define TRL_STREAM_MIXED 0xFFFFFFFFu
 
 /* ----------------------------------------------------------------------- *
  * Well-known attribute key strings (H_ATTR on hierarchy nodes, TR_META on  *
@@ -108,6 +136,11 @@ trl_status_t trl_vc_change_str(trl_writer_t *, uint32_t var_id, uint64_t time, c
 trl_status_t trl_vc_change_real(trl_writer_t *, uint32_t var_id, uint64_t time, double value);
 trl_status_t trl_vc_flush(trl_writer_t *);
 trl_status_t trl_txn_begin_block(trl_writer_t *, uint64_t start_time);
+/* Begin a block that holds records of one stream only. The block's stream id
+ * goes into the per-stream index; trl_txn_full with another stream id
+ * returns TRL_ERR_INVALID. TRL_STREAM_MIXED is the same as
+ * trl_txn_begin_block. */
+trl_status_t trl_txn_begin_block_stream(trl_writer_t *, uint64_t start_time, uint32_t stream_inst_id);
 trl_status_t trl_txn_full(trl_writer_t *, uint32_t stream_inst_id, uint32_t txn_type_id, uint64_t txn_id,
                            uint64_t start, uint64_t end, uint64_t parent,
                            uint32_t attr_count, const trl_attr_t *attrs);

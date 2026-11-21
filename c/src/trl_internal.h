@@ -75,6 +75,7 @@
 #define TRL_TXN_ATTR 0x03
 #define TRL_TXN_END 0x04
 #define TRL_TXN_LINK 0x05
+#define TRL_TXN_META 0x06
 
 typedef struct {
     uint8_t *data;
@@ -156,23 +157,17 @@ typedef struct {
     size_t var_cap;
 } trl_vc_block_t;
 
-typedef struct {
-    uint32_t stream_inst_id;
-    uint32_t txn_type_id;
-    uint64_t txn_id;
-    uint64_t start;
-    uint64_t end;
-    uint64_t parent;
-    uint32_t attr_count;
-    trl_attr_t *attrs;
-} trl_txn_full_rec_t;
-
+/* Records are encoded into `recs` as they are added (the delta state is
+ * sequential), so no attribute values are held by pointer and the buffer is
+ * reused from block to block. */
 typedef struct {
     uint64_t start_time;
     uint64_t end_time;
-    trl_txn_full_rec_t *records;
+    uint32_t stream_inst_id;  /* TRL_STREAM_MIXED unless single-stream */
     size_t count;
-    size_t cap;
+    int64_t prev_txn_id;
+    int64_t prev_time;
+    trl_buf_t recs;
 } trl_txn_block_t;
 
 typedef struct {
@@ -191,7 +186,16 @@ typedef struct {
     uint64_t start;
     uint64_t end;
     uint64_t offset;
+    uint32_t stream_inst_id;  /* txn entries only; TRL_STREAM_MIXED if mixed */
 } trl_index_entry_t;
+
+/* One H_STREAM entry decoded out of a BLK_HIERARCHY payload (trl_query.h,
+ * phase 3's name lookup). */
+typedef struct {
+    uint32_t stream_inst_id;
+    uint32_t stream_type_id;
+    uint32_t name_id;
+} trl_hier_stream_entry_t;
 
 typedef struct {
     trl_index_entry_t *vc_entries;
@@ -238,6 +242,7 @@ struct trl_reader {
     int64_t timezero;
     uint8_t version_major;
     uint8_t version_minor;
+    trl_string_table_t strtab;
     trl_type_registry_t typereg;
     uint32_t *var_sig_type_ids;
     size_t var_sig_cap;
@@ -450,8 +455,23 @@ trl_status_t trl_hierarchy_begin_scope(trl_hierarchy_t *hier, uint8_t scope_type
 trl_status_t trl_hierarchy_end_scope(trl_hierarchy_t *hier);
 uint32_t trl_hierarchy_add_var(trl_hierarchy_t *hier, uint32_t name_id, uint32_t sig_type_id, uint8_t dir,
                                uint32_t src_file_str_id, uint32_t src_line);
+uint32_t trl_hierarchy_add_stream(trl_hierarchy_t *hier, uint32_t stream_type_id, uint32_t name_id);
+/* Like trl_hierarchy_add_stream, but the instance id is supplied by the
+ * caller instead of coming from hier->next_stream_id. Used by the session
+ * layer (rec.c), whose stream instance ids are assigned once, up front, by a
+ * db-wide counter, and must stay stable across several lazily-flushed
+ * hierarchy blocks (each flush is a fresh trl_hierarchy_begin, which would
+ * otherwise restart the auto-increment at 1 and collide with earlier ids). */
+trl_status_t trl_hierarchy_add_stream_explicit(trl_hierarchy_t *hier, uint32_t stream_inst_id,
+                                               uint32_t stream_type_id, uint32_t name_id);
 trl_status_t trl_hierarchy_encode_block(const trl_hierarchy_t *hier, trl_compress_t compress, trl_buf_t *out);
 trl_status_t trl_hierarchy_decode_payload(const uint8_t *payload, size_t payload_len, uint8_t flags, uint32_t **var_sig_type_ids, size_t *var_sig_cap);
+/* Like trl_hierarchy_decode_payload, but collects H_STREAM entries instead of
+ * var signal-type ids (trl_query.h's name lookup, phase 3). *out/*out_count/
+ * *out_cap follow the usual grow-in-place array convention; entries are
+ * appended, so the same arrays can be reused across several hierarchy blocks. */
+trl_status_t trl_hierarchy_decode_streams(const uint8_t *payload, size_t payload_len, uint8_t flags,
+                                          trl_hier_stream_entry_t **out, size_t *out_count, size_t *out_cap);
 
 void trl_vc_block_init(trl_vc_block_t *blk);
 void trl_vc_block_free(trl_vc_block_t *blk);
@@ -465,8 +485,13 @@ trl_status_t trl_vc_iter_payload(const uint8_t *payload, size_t payload_len, uin
 
 void trl_txn_block_init(trl_txn_block_t *blk);
 void trl_txn_block_free(trl_txn_block_t *blk);
-trl_status_t trl_txn_block_begin(trl_txn_block_t *blk, uint64_t start_time);
+trl_status_t trl_txn_block_begin(trl_txn_block_t *blk, uint64_t start_time, uint32_t stream_inst_id);
 trl_status_t trl_txn_block_add_full(trl_txn_block_t *blk, uint32_t stream_inst_id, uint32_t txn_type_id, uint64_t txn_id, uint64_t start, uint64_t end, uint64_t parent, uint32_t attr_count, const trl_attr_t *attrs);
+trl_status_t trl_txn_block_add_begin(trl_txn_block_t *blk, uint32_t stream_inst_id, uint32_t txn_type_id, uint64_t txn_id, uint64_t start, uint64_t parent);
+trl_status_t trl_txn_block_add_attr(trl_txn_block_t *blk, uint64_t txn_id, const trl_attr_t *attr);
+trl_status_t trl_txn_block_add_end(trl_txn_block_t *blk, uint64_t txn_id, uint64_t end_time);
+trl_status_t trl_txn_block_add_link(trl_txn_block_t *blk, uint8_t link_type, uint64_t src, uint64_t tgt, uint32_t label_sid);
+trl_status_t trl_txn_block_add_meta(trl_txn_block_t *blk, uint64_t txn_id, uint32_t key_sid, uint32_t val_sid);
 trl_status_t trl_txn_block_encode(const trl_txn_block_t *blk, trl_compress_t compress, trl_buf_t *out);
 
 trl_status_t trl_ext_encode_block(const uint8_t ext_type[4], uint16_t ext_version, const uint8_t *payload, size_t payload_len, trl_buf_t *out);
@@ -475,7 +500,7 @@ trl_status_t trl_ext_decode_payload(const uint8_t *payload, size_t payload_len, 
 void trl_index_init(trl_index_t *idx);
 void trl_index_free(trl_index_t *idx);
 trl_status_t trl_index_add_vc(trl_index_t *idx, uint64_t start, uint64_t end, uint64_t offset);
-trl_status_t trl_index_add_txn(trl_index_t *idx, uint64_t start, uint64_t end, uint64_t offset);
+trl_status_t trl_index_add_txn(trl_index_t *idx, uint64_t start, uint64_t end, uint64_t offset, uint32_t stream_inst_id);
 trl_status_t trl_index_add_hier_offset(trl_index_t *idx, uint64_t offset);
 trl_status_t trl_index_encode_block(const trl_index_t *idx, trl_buf_t *out);
 trl_status_t trl_index_decode_payload(trl_index_t *idx, const uint8_t *payload, size_t payload_len);

@@ -213,14 +213,14 @@ class IndexBlock:
         """Return file offsets of Txn blocks for *stream_inst_id*.
 
         When *start* / *end* are given the result is further restricted to
-        blocks whose time range overlaps ``[start, end]``.  When no entries
-        carry per-stream information (all ``0xFFFFFFFF``), every entry is
-        returned (the caller must fall back to record-level filtering).
+        blocks whose time range overlaps ``[start, end]``.  Mixed blocks
+        (``stream_inst_id == 0xFFFFFFFF``) are always candidates, since they
+        may hold records for any stream; the caller filters their records.
+        A file can contain both per-stream and mixed blocks.
         """
-        all_unknown = all(sid == 0xFFFFFFFF for _, _, _, sid in self._txn_entries)
         result: List[int] = []
         for s, e, off, sid in self._txn_entries:
-            if not all_unknown and sid != stream_inst_id:
+            if sid != 0xFFFFFFFF and sid != stream_inst_id:
                 continue
             if start is not None and e < start:
                 continue

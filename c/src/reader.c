@@ -28,7 +28,10 @@ static trl_status_t trl_reader_scan(trl_reader_t *r) {
         uint8_t *payload = payload_len ? (uint8_t *)malloc(payload_len) : NULL;
         if (payload_len && !payload) return TRL_ERR_OOM;
         if (payload_len && fread(payload, 1, payload_len, r->fp) != payload_len) { free(payload); return TRL_ERR_IO; }
-        if (type == TRL_BLK_FILE_HDR) {
+        if (type == TRL_BLK_STR_TABLE) {
+            st = trl_string_table_decode_payload(&r->strtab, payload, payload_len, flags);
+            if (st != TRL_OK) { free(payload); return st; }
+        } else if (type == TRL_BLK_FILE_HDR) {
             if (payload_len < 8 + 1 + 1 + 1 + 8) { free(payload); return TRL_ERR_CORRUPT; }
             if (memcmp(payload, TRL_MAGIC_BYTES, 8) != 0) { free(payload); return TRL_ERR_MAGIC; }
             r->version_major = payload[8];
@@ -57,6 +60,7 @@ trl_reader_t *trl_reader_open(const char *path) {
     if (!r) return NULL;
     r->fp = fopen(path, "rb");
     if (!r->fp) { free(r); return NULL; }
+    trl_string_table_init(&r->strtab);
     trl_type_registry_init(&r->typereg);
     trl_index_init(&r->index);
     r->status = trl_reader_scan(r);
@@ -103,6 +107,7 @@ trl_status_t trl_iter_vc(trl_reader_t *r, trl_vc_cb cb, void *user) {
 trl_status_t trl_reader_close(trl_reader_t *r) {
     if (!r) return TRL_OK;
     if (r->fp) fclose(r->fp);
+    trl_string_table_free(&r->strtab);
     trl_type_registry_free(&r->typereg);
     trl_index_free(&r->index);
     free(r->var_sig_type_ids);

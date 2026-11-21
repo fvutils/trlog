@@ -18,6 +18,33 @@ add_test(
     COMMAND test_golden ${_golden_out} ${_fixture_dir}
 )
 
+# Phase 2 harness for the L0 recording session (trl/trl_rec.h).
+add_executable(test_rec test_rec.c)
+target_link_libraries(test_rec PRIVATE trl)
+target_include_directories(test_rec PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(
+    NAME c_rec
+    COMMAND test_rec ${CMAKE_CURRENT_BINARY_DIR}/phase2_session.trl
+)
+
+# Phase 3 harness for the L0 reading session (trl/trl_query.h).
+add_executable(test_query test_query.c)
+target_link_libraries(test_query PRIVATE trl)
+target_include_directories(test_query PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(
+    NAME c_query
+    COMMAND test_query ${CMAKE_CURRENT_BINARY_DIR}/phase3_query.trl
+)
+
+# Phase 4 harness for the DPI-C glue (trl/trl_sv.c, L1), called with its
+# plain-C ABI (no simulator involved; see sv/ for the Verilator smoke test).
+add_executable(test_sv test_sv.c)
+target_link_libraries(test_sv PRIVATE trl_sv trl)
+add_test(
+    NAME c_sv
+    COMMAND test_sv ${CMAKE_CURRENT_BINARY_DIR}/phase4_sv.trl
+)
+
 # Codec registry / ABI-surface unit tests.
 add_executable(test_codec test_codec.c)
 target_link_libraries(test_codec PRIVATE trl)

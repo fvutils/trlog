@@ -158,19 +158,105 @@ static void build_txn_schema_attrs(const char *path) {
     trl_writer_close(w);
 }
 
+/* Mirrors corpus.py txn_field_kinds: one field per wire field type. */
+static void set_kinds(trl_attr_t *a, int k) {
+    static const uint8_t wide0[9] = {0x20, 0, 0, 0, 0, 0, 0, 0x5A, 0x5A};  /* 70 bits */
+    static const uint8_t wide1[1] = {0x01};
+    static const uint8_t blob0[3] = {0x00, 0x01, 0xFF};
+    static const uint8_t bus0[2]  = {0x16, 0x03};             /* 5 bits: aval, bval */
+    static const uint8_t bus1[4]  = {0x0A, 0xBC, 0x00, 0x00}; /* 12 bits */
+    static const trl_field_type_t ft[17] = {
+        TRL_FT_U8, TRL_FT_U16, TRL_FT_U32, TRL_FT_U64, TRL_FT_I8, TRL_FT_I16,
+        TRL_FT_I32, TRL_FT_I64, TRL_FT_F32, TRL_FT_F64, TRL_FT_BOOL,
+        TRL_FT_STRING, TRL_FT_BITVEC, TRL_FT_BYTES, TRL_FT_TIME, TRL_FT_ENUM,
+        TRL_FT_LOGICVEC,
+    };
+    /* String goes through a stack buffer that is overwritten after the call,
+     * which checks that the writer copies values instead of keeping pointers. */
+    for (int i = 0; i < 17; ++i) {
+        memset(&a[i], 0, sizeof(a[i]));
+        a[i].field_idx = (uint32_t)i;
+        a[i].field_type = ft[i];
+    }
+    a[0].value.u64 = k ? 0 : 0xAB;
+    a[1].value.u64 = k ? 1 : 0xBEEF;
+    a[2].value.u64 = k ? 2 : 0xDEADBEEF;
+    a[3].value.u64 = k ? 3 : 0x0123456789ABCDEFull;
+    a[4].value.i64 = k ? 127 : -5;
+    a[5].value.i64 = k ? 300 : -300;
+    a[6].value.i64 = k ? 70000 : -70000;
+    a[7].value.i64 = k ? (1LL << 40) : -(1LL << 40);
+    a[8].value.f64 = k ? -0.25 : 1.5;
+    a[9].value.f64 = k ? -1e-300 : 3.141592653589793;
+    a[10].value.u64 = k ? 0 : 1;
+    a[11].value.str = NULL;  /* set by the caller */
+    a[12].value.vec.width = k ? 1 : 70;
+    a[12].value.vec.data = k ? wide1 : wide0;
+    a[13].value.vec.len = k ? 0 : 3;
+    a[13].value.vec.data = k ? NULL : blob0;
+    a[14].value.u64 = k ? 0 : 123456789;
+    a[15].value.u64 = k ? 300 : 3;
+    a[16].value.vec.width = k ? 12 : 5;
+    a[16].value.vec.data = k ? bus1 : bus0;
+}
+
+static void build_txn_field_kinds(const char *path) {
+    static const char *names[17] = {
+        "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64",
+        "flag", "name", "wide", "blob", "when", "state", "bus",
+    };
+    trl_writer_t *w = trl_writer_open(path, -9, TRL_COMPRESS_NONE);
+    trl_field_def_t fields[17];
+    trl_attr_t a[17];
+    char strbuf[16];
+    set_kinds(a, 0);
+    for (int i = 0; i < 17; ++i) {
+        fields[i].name_str_id = trl_intern(w, names[i]);
+        fields[i].field_type = a[i].field_type;
+    }
+    uint32_t t = trl_add_txn_schema(w, trl_intern(w, "Kinds"), 17, fields);
+
+    EXPECT(trl_txn_begin_block(w, 0) == TRL_OK, "begin mixed block");
+    set_kinds(a, 0);
+    strcpy(strbuf, "r\xc3\xa9" "ad");
+    a[11].value.str = strbuf;
+    EXPECT(trl_txn_full(w, 1, t, 1, 0, 10, 0, 17, a) == TRL_OK, "txn 1");
+    strcpy(strbuf, "CLOBBERED");
+    set_kinds(a, 1);
+    strbuf[0] = '\0';
+    a[11].value.str = strbuf;
+    EXPECT(trl_txn_full(w, 2, t, 2, 5, 20, 1, 17, a) == TRL_OK, "txn 2");
+    strcpy(strbuf, "CLOBBERED");
+    EXPECT(trl_txn_end_block(w) == TRL_OK, "end mixed block");
+
+    EXPECT(trl_txn_begin_block_stream(w, 20, 2) == TRL_OK, "begin stream block");
+    set_kinds(a, 0);
+    a[11].value.str = "r\xc3\xa9" "ad";
+    EXPECT(trl_txn_full(w, 2, t, 3, 20, 25, 0, 17, a) == TRL_OK, "txn 3");
+    /* A record of another stream is rejected and leaves the block intact. */
+    EXPECT(trl_txn_full(w, 1, t, 99, 25, 26, 0, 17, a) == TRL_ERR_INVALID, "wrong stream rejected");
+    trl_attr_t one = {0};
+    one.field_idx = 15; one.field_type = TRL_FT_ENUM; one.value.u64 = 7;
+    EXPECT(trl_txn_full(w, 2, t, 4, 30, 30, 0, 1, &one) == TRL_OK, "txn 4");
+    EXPECT(trl_txn_end_block(w) == TRL_OK, "end stream block");
+    EXPECT(trl_writer_close(w) == TRL_OK, "close");
+}
+
 typedef void (*build_fn)(const char *path);
 
-struct entry { const char *name; build_fn build; };
+/* must_match: byte divergence from the Python fixture fails the test. */
+struct entry { const char *name; build_fn build; int must_match; };
 
 static const struct entry ENTRIES[] = {
-    {"empty",            build_empty},
+    {"empty",            build_empty, 1},
     {"vc_2state_1bit",   build_vc_2state_1bit},
     {"vc_2state_32bit",  build_vc_2state_32bit},
     {"vc_real",          build_vc_real},
     {"vc_string",        build_vc_string},
     {"hierarchy",        build_hierarchy},
-    {"txn_row",          build_txn_row},
-    {"txn_schema_attrs", build_txn_schema_attrs},
+    {"txn_row",          build_txn_row, 1},
+    {"txn_schema_attrs", build_txn_schema_attrs, 1},
+    {"txn_field_kinds",  build_txn_field_kinds, 1},
 };
 static const int N_ENTRIES = (int)(sizeof(ENTRIES) / sizeof(ENTRIES[0]));
 
@@ -221,13 +307,13 @@ int main(int argc, char **argv) {
             uint8_t *cb = read_file(path, &clen);
             if (!fx) {
                 verdict = "(no fixture)"; no_fixture++;
+                if (e->must_match) EXPECT(0, e->name);
             } else if (cb && flen == clen && memcmp(fx, cb, (size_t)flen) == 0) {
                 verdict = "MATCH"; matches++;
             } else {
                 verdict = "DIVERGE"; diverges++;
-#if ASSERT_BYTE_MATCH
-                EXPECT(0, e->name);  /* later-phase: byte-match is mandatory */
-#endif
+                if (ASSERT_BYTE_MATCH || e->must_match)
+                    EXPECT(0, e->name);
             }
             free(fx); free(cb);
         }
