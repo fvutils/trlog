@@ -5,6 +5,9 @@
  * Windows: the main program, then every module loaded in the process.
  */
 
+#if !defined(_WIN32) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE /* RTLD_DEFAULT on older glibc (manylinux_2_28) */
+#endif
 #define TRLOG_VPI_FN_NO_MACROS
 #include "trlog_vpi_internal.h"
 
