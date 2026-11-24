@@ -3,7 +3,7 @@
 # By default both are built from source as static, position-independent
 # libraries and linked into trl, so wheels (manylinux/macOS/Windows) and the
 # Emscripten build need no system libraries. Sources come from
-# <PACKAGES_DIR>/zlib and <PACKAGES_DIR>/lz4, fetched by `ivpm update`
+# <PACKAGES_DIR>/zlib and <PACKAGES_DIR>/lz4-src, fetched by `ivpm update`
 # (pinned in ivpm.yaml); -DTRL_ZLIB_SRC / -DTRL_LZ4_SRC override them.
 #
 # -DTRL_SYSTEM_DEPS=ON uses the system zlib and liblz4 instead (distro builds).
@@ -43,7 +43,7 @@ endif()
 set(PACKAGES_DIR ${PACKAGES_DIR} CACHE PATH "ivpm packages (dependency) directory")
 
 set(TRL_ZLIB_SRC ${PACKAGES_DIR}/zlib CACHE PATH "zlib source tree")
-set(TRL_LZ4_SRC ${PACKAGES_DIR}/lz4 CACHE PATH "lz4 source tree")
+set(TRL_LZ4_SRC ${PACKAGES_DIR}/lz4-src CACHE PATH "lz4 source tree")
 
 foreach(_f ${TRL_ZLIB_SRC}/zlib.h ${TRL_LZ4_SRC}/lib/lz4.h)
     if(NOT EXISTS ${_f})

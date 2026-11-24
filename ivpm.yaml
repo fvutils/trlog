@@ -10,7 +10,7 @@ package:
     - name: zlib
       url: https://github.com/madler/zlib.git
       tag: v1.3.1
-    - name: lz4
+    - name: lz4-src
       url: https://github.com/lz4/lz4.git
       tag: v1.10.0
   - name: default-dev
@@ -58,7 +58,7 @@ package:
   # different dep-set (delete packages/ivpm.json to switch).
   - name: ts-build
     uses:
-    - default-dev
+    - default
     - wasm-build
     deps: []
 

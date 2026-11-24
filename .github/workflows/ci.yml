@@ -30,7 +30,7 @@ jobs:
         # tags match the `default` dep-set in ivpm.yaml.
         run: |
           git clone -q --depth 1 -b v1.3.1 https://github.com/madler/zlib.git packages/zlib
-          git clone -q --depth 1 -b v1.10.0 https://github.com/lz4/lz4.git packages/lz4
+          git clone -q --depth 1 -b v1.10.0 https://github.com/lz4/lz4.git packages/lz4-src
 
       - name: Build C library + tests
         run: |
@@ -82,7 +82,7 @@ jobs:
       - name: Fetch zlib + lz4 sources
         run: |
           git clone -q --depth 1 -b v1.3.1 https://github.com/madler/zlib.git packages/zlib
-          git clone -q --depth 1 -b v1.10.0 https://github.com/lz4/lz4.git packages/lz4
+          git clone -q --depth 1 -b v1.10.0 https://github.com/lz4/lz4.git packages/lz4-src
 
       - name: Build C library, VPI library + tests (MSVC)
         # One output directory, so the test programs find trl.dll beside them.

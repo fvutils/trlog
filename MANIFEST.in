@@ -8,4 +8,4 @@ recursive-include c *.c *.cpp *.h *.txt *.cmake
 recursive-include vpi *.c *.cpp *.h *.sv *.txt
 recursive-include sv/src *.sv *.svh
 include packages/zlib/*.c packages/zlib/*.h packages/zlib/LICENSE
-include packages/lz4/lib/lz4.c packages/lz4/lib/lz4.h packages/lz4/lib/LICENSE
+include packages/lz4-src/lib/lz4.c packages/lz4-src/lib/lz4.h packages/lz4-src/lib/LICENSE

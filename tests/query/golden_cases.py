@@ -176,6 +176,8 @@ def run_case(argv, trace_path, stdin: str = None) -> str:
         text = "\n".join(_normalize_json_line(l) for l in text.splitlines()) + "\n"
     if err.getvalue():
         text += "--- stderr\n" + err.getvalue()
+    # JSON escapes the backslashes in a Windows path
+    text = text.replace(json.dumps(str(trace_path))[1:-1], "TRACE")
     text = text.replace(str(trace_path), "TRACE")
     text = re.sub(r"(?m)^(engine\s+)(c|python)$", r"\1*", text)
     return f"exit: {rc}\n" + text

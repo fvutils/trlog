@@ -30,7 +30,9 @@ Reference repos: `~/projects/fvutils/dv-solve` (pyproject.toml,
 | 9. (later) Query engine from JS | deferred |
 | 10. (later) Writing from JS | deferred |
 
-Next action: push the branch and run wheels.yml by hand (workflow_dispatch) to see every build job green, set org secrets `PYPI_API_TOKEN` and `NPM_TOKEN`, then tag `v0.1.0`. Steps 9-10 deferred.
+CI (2026-11-24): pushed to main (3edd461); first GitHub run: Linux CI, sdist, macOS x86_64 green; fixes pushed for macos-arm64 (`macos-14` runner retired → `macos-15`), Windows pytest (Windows paths in `batch` shlex and JSON golden normalization), npm job (ivpm `lz4` name clash with the pypi package → C source renamed `lz4-src`; `ts-build` uses `default`, not `default-dev`).
+
+Next action: get every wheels.yml job green (workflow_dispatch on main), set org secrets `PYPI_API_TOKEN` and `NPM_TOKEN`, then tag `v0.1.0`. Steps 9-10 deferred.
 
 ## Current state (2026-11-24)
 

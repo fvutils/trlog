@@ -1605,7 +1605,11 @@ class _BatchJsonOutput(Output):
 
 
 def _batch_argv(line: str, trace_path: str) -> List[str]:
-    argv = shlex.split(line, comments=True)
+    lex = shlex.shlex(line, posix=True)
+    lex.whitespace_split = True
+    if os.name == "nt":
+        lex.escape = ""  # keep the backslashes in Windows paths
+    argv = list(lex)
     if argv and argv[0] == "trlog":
         argv = argv[1:]
     # tolerate the trace path repeated on the line (`find run.trl ...`)
