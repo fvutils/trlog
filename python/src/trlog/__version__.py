@@ -6,7 +6,7 @@
 # version into the npm package. SUFFIX is rewritten by CI for non-release
 # builds so a development wheel can never collide with a release.
 
-BASE = "0.1.0"
+BASE = "0.1.1"
 SUFFIX = ""
 
 __version__ = (BASE, SUFFIX)

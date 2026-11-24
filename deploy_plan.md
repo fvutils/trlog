@@ -32,7 +32,11 @@ Reference repos: `~/projects/fvutils/dv-solve` (pyproject.toml,
 
 CI (2026-11-24): pushed to main (3edd461); first GitHub run: Linux CI, sdist, macOS x86_64 green; fixes pushed for macos-arm64 (`macos-14` runner retired → `macos-15`), Windows pytest (Windows paths in `batch` shlex and JSON golden normalization), npm job (ivpm `lz4` name clash with the pypi package → C source renamed `lz4-src`; `ts-build` uses `default`, not `default-dev`).
 
-Next action: get every wheels.yml job green (workflow_dispatch on main), set org secrets `PYPI_API_TOKEN` and `NPM_TOKEN`, then tag `v0.1.0`. Steps 9-10 deferred.
+Then RTLD_DEFAULT needed `_GNU_SOURCE` on manylinux (653f2ec). On 653f2ec every CI and wheels.yml job is green (7 wheels, sdist, npm; publish skipped on dispatch). Org secrets `PYPI_API_TOKEN` and `NPM_TOKEN` are visible to the repo.
+
+v0.1.0 (2026-11-24): PyPI published (https://pypi.org/project/trlog/0.1.0/); npm publish failed (`npm publish npm-dist/x.tgz` read as a GitHub owner/repo shorthand; needs `./`). Fixed and re-released as v0.1.1 (npm starts at 0.1.1).
+
+Next action: confirm v0.1.1 on PyPI and npm. Steps 9-10 deferred.
 
 ## Current state (2026-11-24)
 

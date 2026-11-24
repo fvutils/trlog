@@ -347,5 +347,5 @@ jobs:
             echo "::error::NPM_TOKEN is not set for this repository"
             exit 1
           fi
-          npm publish npm-dist/*.tgz --access public
+          npm publish ./npm-dist/*.tgz --access public
           echo "published $(ls npm-dist/*.tgz) to npm"
