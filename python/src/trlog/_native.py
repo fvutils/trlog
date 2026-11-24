@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Iterable, Optional
 
+from . import _libpath
 from ._types import FieldType, HierKind, Radix, ScopeType, SignalEncoding, TxnAttr, VarDir
 from ._writer import TrlWriter as _PyWriter
 from ._reader import TrlReader as _PyReader
@@ -46,23 +47,10 @@ class _Attr(ctypes.Structure):
 
 
 def _load_library() -> Optional[ctypes.CDLL]:
-    candidates = []
-    env_path = os.environ.get("TRL_LIBRARY_PATH")
-    if env_path:
-        candidates.append(Path(env_path))
-    repo_root = Path(__file__).resolve().parents[3]
-    candidates.extend(
-        [
-            repo_root / "build" / "c" / "libtrl.so",   # CMake default layout
-            repo_root / "build" / "libtrl.so",
-            repo_root / "c" / "build" / "libtrl.so",
-            Path("libtrl.so"),
-        ]
-    )
-    for path in candidates:
+    for path in _libpath.candidates("trl"):
         try:
             if path.exists():
-                return ctypes.CDLL(str(path))
+                return _libpath.open_cdll(path)
         except OSError:
             continue
     return None

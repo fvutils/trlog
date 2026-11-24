@@ -10,16 +10,12 @@
  */
 
 #include "varint_internal.h"
+#include "trl_portable.h"
 #include "trl/trl_qscan.h"
 
 #include <stdarg.h>
 #include <stdio.h>
 
-#if defined(_WIN32)
-#define qs_fseek _fseeki64
-#else
-#define qs_fseek fseeko
-#endif
 
 /* ----------------------------------------------------------------------- *
  * Bytecode (mirrored in python/src/trlog/query/_cengine.py)
@@ -511,7 +507,7 @@ static int as_i64(trl_qscan_t *q, uint64_t v, int64_t *out, const char *what) {
 }
 
 static int add_i64(trl_qscan_t *q, int64_t a, int64_t b, int64_t *out) {
-    if (__builtin_add_overflow(a, b, out)) FALLBACK(q, "time or id beyond int64");
+    if (trl_add_overflow_i64(a, b, out)) FALLBACK(q, "time or id beyond int64");
     return TRL_QS_OK;
 }
 
@@ -920,7 +916,7 @@ static int read_block(trl_qscan_t *q, uint64_t offset, uint8_t *type, uint8_t *f
                       size_t *plen) {
     uint8_t hdr[TRL_BLOCK_HEADER_SIZE];
     if (offset > (uint64_t)INT64_MAX) FALLBACK(q, "block offset beyond int64");
-    if (qs_fseek(q->fp, (off_t)offset, SEEK_SET) != 0) FALLBACK(q, "seek failed");
+    if (trl_fseek64(q->fp, (int64_t)offset, SEEK_SET) != 0) FALLBACK(q, "seek failed");
     if (fread(hdr, 1, sizeof(hdr), q->fp) != sizeof(hdr)) FALLBACK(q, "truncated block header");
     *type = hdr[0];
     *flags = hdr[1];
@@ -1084,9 +1080,9 @@ static qs_val_t arith(int op, qs_val_t a, qs_val_t b) {
     if (a.tag == V_DEFER || b.tag == V_DEFER) return mk(V_DEFER, 0);
     int64_t x = a.v, y = b.v, r;
     switch (op) {
-    case A_ADD: if (__builtin_add_overflow(x, y, &r)) return mk(V_DEFER, 0); return mk(V_INT, r);
-    case A_SUB: if (__builtin_sub_overflow(x, y, &r)) return mk(V_DEFER, 0); return mk(V_INT, r);
-    case A_MUL: if (__builtin_mul_overflow(x, y, &r)) return mk(V_DEFER, 0); return mk(V_INT, r);
+    case A_ADD: if (trl_add_overflow_i64(x, y, &r)) return mk(V_DEFER, 0); return mk(V_INT, r);
+    case A_SUB: if (trl_sub_overflow_i64(x, y, &r)) return mk(V_DEFER, 0); return mk(V_INT, r);
+    case A_MUL: if (trl_mul_overflow_i64(x, y, &r)) return mk(V_DEFER, 0); return mk(V_INT, r);
     case A_DIV:
         if (y == 0) return mk(V_MISS, 0);
         if (x == INT64_MIN && y == -1) return mk(V_DEFER, 0);
@@ -1197,7 +1193,7 @@ static qs_val_t run_prog(trl_qscan_t *q, const qs_txn_t *t, int64_t entry) {
             case B_END:    if (t->open) v = mk(V_MISS, 0); else v.v = t->end; break;
             case B_DUR:
                 if (t->open) v = mk(V_MISS, 0);
-                else if (__builtin_sub_overflow(t->end, t->start, &v.v)) v = mk(V_DEFER, 0);
+                else if (trl_sub_overflow_i64(t->end, t->start, &v.v)) v = mk(V_DEFER, 0);
                 break;
             case B_PARENT: if (t->parent == 0) v = mk(V_MISS, 0); else v.v = t->parent; break;
             case B_OPEN:   v = mk(V_BOOL, t->open); break;
@@ -1308,7 +1304,7 @@ static qs_val_t run_prog(trl_qscan_t *q, const qs_txn_t *t, int64_t entry) {
             }
             if (h.v < l.v) { st[sp - 1] = mk(V_MISS, 0); break; }
             int64_t w;
-            if (l.v < 0 || __builtin_sub_overflow(h.v, l.v, &w) || w >= INT64_MAX - 1) {
+            if (l.v < 0 || trl_sub_overflow_i64(h.v, l.v, &w) || w >= INT64_MAX - 1) {
                 q->err_possible = true;
                 st[sp - 1] = mk(V_DEFER, 0); break;
             }

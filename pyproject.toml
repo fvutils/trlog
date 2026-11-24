@@ -1,10 +1,20 @@
 [build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
+# ivpm-build's PEP 517 backend runs the CMake build (configure, build,
+# install into build/), stages the native libraries into the package and tags
+# the wheel py3-none-<plat>: the libraries are loaded through ctypes, so the
+# wheel is platform-specific but not tied to a CPython ABI. Same arrangement
+# as dv-solve.
+requires = [
+    "setuptools>=64",
+    "wheel",
+    "ivpm-build>=0.2.1",
+]
+build-backend = "ivpm_build.backend"
 
 [project]
 name = "trlog"
-version = "0.1.0"
+# Supplied by setup.py from python/src/trlog/__version__.py.
+dynamic = ["version"]
 description = "TRLOG trace format: reader/writer, query API and the trlog CLI"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
@@ -22,6 +32,76 @@ trlog-record = "trlog.weave:RecordWeaver"
 [project.scripts]
 trlog = "trlog.cli:main"
 
+[tool.setuptools]
+# Spelled out (as well as packages.find below) because ivpm_build stages
+# extra-data using package-dir; without it the libs land in ./trlog/.
+package-dir = {"" = "python/src"}
+
 [tool.setuptools.packages.find]
 where = ["python/src"]
 include = ["trlog*"]
+
+[tool.setuptools.package-data]
+# Native libs, headers and the SV package, staged into the package by the
+# build (extra-data below).
+trlog = ["*.so", "*.dll", "*.dylib", "*.lib",
+         "share/include/**/*.h", "share/sv/*.sv", "share/sv/*.svh"]
+
+[tool.ivpm-build]
+cmake = true
+
+# Native shared libraries -> the package root (next to __init__.py), where
+# trlog._libpath looks first. CMake installs them into build/lib.
+# Template vars: {libpref}=lib|"" , {dllext}=.so|.dll|.dylib , {libdir}=lib|lib64
+[[tool.ivpm-build.extra-data]]
+pkg = "trlog"
+src = "build/{libdir}/{libpref}trl{dllext}"
+dst = ""
+
+[[tool.ivpm-build.extra-data]]
+pkg = "trlog"
+src = "build/{libdir}/{libpref}trl_sv{dllext}"
+dst = ""
+
+# Not built when no vpi_user.h is found (the backend then warns and skips it).
+[[tool.ivpm-build.extra-data]]
+pkg = "trlog"
+src = "build/{libdir}/{libpref}trlog_vpi{dllext}"
+dst = ""
+
+# Public C headers -> share/include/trl (get_incdirs()).
+[[tool.ivpm-build.extra-data]]
+pkg = "trlog"
+src = "build/include/trl"
+dst = "share/include"
+
+[[tool.ivpm-build.extra-data]]
+pkg = "trlog"
+src = "build/include/trlog_vpi.h"
+dst = "share/include"
+
+# SystemVerilog package -> share/sv (get_svdirs()). The top-level
+# CMakeLists.txt installs sv/src to build/share/sv; the directory basename is
+# appended to dst.
+[[tool.ivpm-build.extra-data]]
+pkg = "trlog"
+src = "build/share/sv"
+dst = "share"
+
+# ---------------------------------------------------------------------------
+# cibuildwheel: one CPython per platform is enough (py3-none-<plat> wheels).
+# ---------------------------------------------------------------------------
+[tool.cibuildwheel]
+build = "cp311-*"
+skip = "*-musllinux*"
+# The bundled native libraries must load from the installed wheel.
+test-command = "python {project}/tests/wheel_smoke.py"
+# c/CMakeLists.txt reads this: the wheel ships no C test executables.
+environment = { TRL_BUILD_TESTS = "OFF" }
+
+[tool.cibuildwheel.linux]
+# Tools must be installed inside the manylinux container. CI overrides the
+# image per matrix entry to also build manylinux_2_28.
+manylinux-x86_64-image = "quay.io/pypa/manylinux_2_34_x86_64"
+manylinux-aarch64-image = "quay.io/pypa/manylinux_2_34_aarch64"
+before-all = "dnf -y install cmake"

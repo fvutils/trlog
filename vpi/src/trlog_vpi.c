@@ -62,12 +62,12 @@ static void parse_signal_patterns(const char *val) {
     if (!val || val[0] == '\0')
         return;
 
-    char *copy = strdup(val);
+    char *copy = trl_strdup(val);
     if (!copy) return;
 
     char *tok = strtok(copy, ",");
     while (tok && g_trlog.pattern_count < TRLOG_VPI_MAX_PATTERNS) {
-        char *pat = strdup(tok);
+        char *pat = trl_strdup(tok);
         if (pat)
             g_trlog.patterns[g_trlog.pattern_count++] = pat;
         tok = strtok(NULL, ",");
@@ -104,6 +104,8 @@ static void apply_plusargs(void) {
  * ---------------------------------------------------------------------- */
 
 void trlog_vpi_register(void) {
+    if (trlog_vpi_fn_load() != 0)
+        return;
     trlog_vpi_state_init();
     apply_plusargs();
 

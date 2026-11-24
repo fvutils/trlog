@@ -1,6 +1,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include "trl/trl_api.h"
 
 #include "trl/trl.h"
 
@@ -43,7 +44,7 @@ typedef struct trl_qscan trl_qscan_t;
 /* Bumped on any change to the bytecode, the packed records or the calls
  * below; the Python side uses the engine only when it knows this version. */
 #define TRL_QSCAN_ABI 2
-int trl_qscan_abi_version(void);
+TRL_API int trl_qscan_abi_version(void);
 
 #define TRL_QS_OK        0
 #define TRL_QS_FALLBACK  100
@@ -115,58 +116,58 @@ typedef struct {
     uint16_t pad;
 } trl_qs_link_t;                        /* 16 bytes, Python '<qIBBH' */
 
-trl_qscan_t *trl_qscan_new(const char *path);
-void         trl_qscan_free(trl_qscan_t *);
+TRL_API trl_qscan_t *trl_qscan_new(const char *path);
+TRL_API void         trl_qscan_free(trl_qscan_t *);
 
 /* Decoder field types of a txn type (what TR_FULL attrs are decoded as).
  * Persistent across queries. */
-trl_status_t trl_qscan_set_schema(trl_qscan_t *, uint32_t type_id, uint32_t n,
+TRL_API trl_status_t trl_qscan_set_schema(trl_qscan_t *, uint32_t type_id, uint32_t n,
                                   const uint8_t *field_types);
 
 /* Clear per-query settings and results; schemas are kept. */
-void         trl_qscan_reset(trl_qscan_t *);
+TRL_API void         trl_qscan_reset(trl_qscan_t *);
 
 /* Per query: for each catalog txn type, each field's name slot (-1 = not
  * used by the program) and normalisation. Attrs of types without a catalog
  * entry, or with field_idx >= n, are "unmapped". */
-trl_status_t trl_qscan_set_catalog(trl_qscan_t *, uint32_t type_id, uint32_t n,
+TRL_API trl_status_t trl_qscan_set_catalog(trl_qscan_t *, uint32_t type_id, uint32_t n,
                                    const int32_t *slots, const uint8_t *norms);
-trl_status_t trl_qscan_set_plan(trl_qscan_t *, size_t n, const int64_t *block_starts,
+TRL_API trl_status_t trl_qscan_set_plan(trl_qscan_t *, size_t n, const int64_t *block_starts,
                                 const uint64_t *offsets, const uint32_t *stream_ids);
 /* Restrict which txns are built; not calling it means all. */
-trl_status_t trl_qscan_set_streams(trl_qscan_t *, size_t n, const uint32_t *ids);
-trl_status_t trl_qscan_set_types(trl_qscan_t *, size_t n, const uint32_t *ids);
+TRL_API trl_status_t trl_qscan_set_streams(trl_qscan_t *, size_t n, const uint32_t *ids);
+TRL_API trl_status_t trl_qscan_set_types(trl_qscan_t *, size_t n, const uint32_t *ids);
 /* code: the bytecode (see qscan.c); sets: label and id sets it refers to.
  * strict_unmapped: an unmapped attr makes LOAD/HAS defer (the program
  * names a field like `f3` that could match one). */
-trl_status_t trl_qscan_set_program(trl_qscan_t *, size_t ncode, const int64_t *code,
+TRL_API trl_status_t trl_qscan_set_program(trl_qscan_t *, size_t ncode, const int64_t *code,
                                    size_t nsets, const int64_t *sets, int strict_unmapped);
 /* Entry points into the program's code: the filter (-1 = none) and the
  * value expressions projected with TRL_QS_PROJECT (each ends with OP_END
  * and leaves its value). */
-trl_status_t trl_qscan_set_entries(trl_qscan_t *, int64_t filter_entry, size_t nvals,
+TRL_API trl_status_t trl_qscan_set_entries(trl_qscan_t *, int64_t filter_entry, size_t nvals,
                                    const int64_t *val_entries);
-void         trl_qscan_set_options(trl_qscan_t *, uint32_t flags, int64_t t_hi,
+TRL_API void         trl_qscan_set_options(trl_qscan_t *, uint32_t flags, int64_t t_hi,
                                    int64_t lo, int64_t hi, int64_t max_txns);
 
 /* TRL_QS_OK, TRL_QS_FALLBACK, or a trl_status_t error. */
-int          trl_qscan_run(trl_qscan_t *);
-const char  *trl_qscan_fallback_reason(const trl_qscan_t *);
+TRL_API int          trl_qscan_run(trl_qscan_t *);
+TRL_API const char  *trl_qscan_fallback_reason(const trl_qscan_t *);
 
-size_t trl_qscan_rows(const trl_qscan_t *, const trl_qs_row_t **out);
-size_t trl_qscan_attrs(const trl_qscan_t *, const trl_qs_attr_t **out);
-size_t trl_qscan_metas(const trl_qscan_t *, const trl_qs_meta_t **out);
-size_t trl_qscan_links(const trl_qscan_t *, const trl_qs_link_t **out);
-size_t trl_qscan_heap(const trl_qscan_t *, const uint8_t **out);
+TRL_API size_t trl_qscan_rows(const trl_qscan_t *, const trl_qs_row_t **out);
+TRL_API size_t trl_qscan_attrs(const trl_qscan_t *, const trl_qs_attr_t **out);
+TRL_API size_t trl_qscan_metas(const trl_qscan_t *, const trl_qs_meta_t **out);
+TRL_API size_t trl_qscan_links(const trl_qscan_t *, const trl_qs_link_t **out);
+TRL_API size_t trl_qscan_heap(const trl_qscan_t *, const uint8_t **out);
 /* With TRL_QS_PROJECT: rows C decided in full (filter TRUE, every value
  * exact) are here, the rest are in trl_qscan_rows. Returns the row count. */
-size_t trl_qscan_proj(const trl_qscan_t *, trl_qs_proj_t *out);
+TRL_API size_t trl_qscan_proj(const trl_qscan_t *, trl_qs_proj_t *out);
 /* out[0] blocks_read, [1] duplicate_ids, [2] rows kept, [3] rows deferred */
-void   trl_qscan_counts(const trl_qscan_t *, int64_t out[4]);
+TRL_API void   trl_qscan_counts(const trl_qscan_t *, int64_t out[4]);
 
 /* Free the results and scan buffers (the caller has copied what it needs);
  * per-query settings and schemas are kept. */
-void   trl_qscan_trim(trl_qscan_t *);
+TRL_API void   trl_qscan_trim(trl_qscan_t *);
 
 #ifdef __cplusplus
 }

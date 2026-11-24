@@ -1,6 +1,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include "trl/trl_api.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -120,45 +121,49 @@ typedef struct {
 #define TRL_WATTR_ORIGIN_LINE       "trlog.origin.line"
 #define TRL_WATTR_ORIGIN_COMPONENT  "trlog.origin.component"
 
-trl_writer_t *trl_writer_open(const char *path, int timescale_exp, trl_compress_t compress);
+TRL_API trl_writer_t *trl_writer_open(const char *path, int timescale_exp, trl_compress_t compress);
 /* Set the header's time offset (default 0). Call any time before close. */
-trl_status_t trl_writer_set_timezero(trl_writer_t *, int64_t timezero);
-uint32_t trl_intern(trl_writer_t *, const char *s);
-uint32_t trl_add_signal_type(trl_writer_t *, uint8_t encoding, uint32_t bit_width, uint8_t radix);
-uint32_t trl_add_txn_schema(trl_writer_t *, uint32_t name_id, uint32_t field_count, const trl_field_def_t *fields);
-trl_status_t trl_begin_hierarchy(trl_writer_t *, uint32_t hier_id, uint8_t kind, uint32_t name_id);
-trl_status_t trl_hier_begin_scope(trl_writer_t *, uint8_t scope_type, uint32_t name_id, uint32_t component_id,
+TRL_API trl_status_t trl_writer_set_timezero(trl_writer_t *, int64_t timezero);
+TRL_API uint32_t trl_intern(trl_writer_t *, const char *s);
+TRL_API uint32_t trl_add_signal_type(trl_writer_t *, uint8_t encoding, uint32_t bit_width, uint8_t radix);
+TRL_API uint32_t trl_add_txn_schema(trl_writer_t *, uint32_t name_id, uint32_t field_count, const trl_field_def_t *fields);
+TRL_API trl_status_t trl_begin_hierarchy(trl_writer_t *, uint32_t hier_id, uint8_t kind, uint32_t name_id);
+TRL_API trl_status_t trl_hier_begin_scope(trl_writer_t *, uint8_t scope_type, uint32_t name_id, uint32_t component_id,
                                   uint32_t src_file_str_id, uint32_t src_line);
-trl_status_t trl_hier_end_scope(trl_writer_t *);
-uint32_t trl_hier_add_var(trl_writer_t *, uint32_t name_id, uint32_t sig_type_id, uint8_t dir,
+TRL_API trl_status_t trl_hier_end_scope(trl_writer_t *);
+TRL_API uint32_t trl_hier_add_var(trl_writer_t *, uint32_t name_id, uint32_t sig_type_id, uint8_t dir,
                           uint32_t src_file_str_id, uint32_t src_line);
 /* Attach a key/value string attribute (H_ATTR) to the most recently declared
  * scope, var or stream of the open hierarchy. Returns TRL_ERR_INVALID if no
  * node has been declared yet. */
-trl_status_t trl_hier_add_attr(trl_writer_t *, uint32_t key_str_id, uint32_t value_str_id);
-uint32_t trl_hier_add_stream(trl_writer_t *, uint32_t stream_type_id, uint32_t name_id);
-trl_status_t trl_flush_hierarchy(trl_writer_t *);
-trl_status_t trl_vc_begin(trl_writer_t *, uint64_t start_time);
-trl_status_t trl_vc_change_u64(trl_writer_t *, uint32_t var_id, uint64_t time, uint64_t value);
-trl_status_t trl_vc_change_bytes(trl_writer_t *, uint32_t var_id, uint64_t time, const uint8_t *value, uint32_t len);
-trl_status_t trl_vc_change_str(trl_writer_t *, uint32_t var_id, uint64_t time, const char *value);
-trl_status_t trl_vc_change_real(trl_writer_t *, uint32_t var_id, uint64_t time, double value);
-trl_status_t trl_vc_flush(trl_writer_t *);
-trl_status_t trl_txn_begin_block(trl_writer_t *, uint64_t start_time);
+TRL_API trl_status_t trl_hier_add_attr(trl_writer_t *, uint32_t key_str_id, uint32_t value_str_id);
+TRL_API uint32_t trl_hier_add_stream(trl_writer_t *, uint32_t stream_type_id, uint32_t name_id);
+TRL_API trl_status_t trl_flush_hierarchy(trl_writer_t *);
+TRL_API trl_status_t trl_vc_begin(trl_writer_t *, uint64_t start_time);
+TRL_API trl_status_t trl_vc_change_u64(trl_writer_t *, uint32_t var_id, uint64_t time, uint64_t value);
+TRL_API trl_status_t trl_vc_change_bytes(trl_writer_t *, uint32_t var_id, uint64_t time, const uint8_t *value, uint32_t len);
+TRL_API trl_status_t trl_vc_change_str(trl_writer_t *, uint32_t var_id, uint64_t time, const char *value);
+TRL_API trl_status_t trl_vc_change_real(trl_writer_t *, uint32_t var_id, uint64_t time, double value);
+TRL_API trl_status_t trl_vc_flush(trl_writer_t *);
+TRL_API trl_status_t trl_txn_begin_block(trl_writer_t *, uint64_t start_time);
 /* Begin a block that holds records of one stream only. The block's stream id
  * goes into the per-stream index; trl_txn_full with another stream id
  * returns TRL_ERR_INVALID. TRL_STREAM_MIXED is the same as
  * trl_txn_begin_block. */
-trl_status_t trl_txn_begin_block_stream(trl_writer_t *, uint64_t start_time, uint32_t stream_inst_id);
-trl_status_t trl_txn_full(trl_writer_t *, uint32_t stream_inst_id, uint32_t txn_type_id, uint64_t txn_id,
+TRL_API trl_status_t trl_txn_begin_block_stream(trl_writer_t *, uint64_t start_time, uint32_t stream_inst_id);
+TRL_API trl_status_t trl_txn_full(trl_writer_t *, uint32_t stream_inst_id, uint32_t txn_type_id, uint64_t txn_id,
                            uint64_t start, uint64_t end, uint64_t parent,
                            uint32_t attr_count, const trl_attr_t *attrs);
-trl_status_t trl_txn_meta(trl_writer_t *, uint64_t txn_id,
+TRL_API trl_status_t trl_txn_meta(trl_writer_t *, uint64_t txn_id,
                            uint32_t key_str_id, uint32_t value_str_id);
-trl_status_t trl_txn_end_block(trl_writer_t *);
-trl_status_t trl_writer_close(trl_writer_t *);
+TRL_API trl_status_t trl_txn_end_block(trl_writer_t *);
+TRL_API trl_status_t trl_writer_close(trl_writer_t *);
 
-trl_reader_t *trl_reader_open(const char *path);
+TRL_API trl_reader_t *trl_reader_open(const char *path);
+/* Opens a trace held in memory (the whole file's bytes). The buffer is
+ * borrowed, not copied: it must stay valid and unchanged until
+ * trl_reader_close. Returns NULL if the bytes are not a valid trace. */
+TRL_API trl_reader_t *trl_reader_open_mem(const void *buf, size_t len);
 
 /* Value-change callback. `val`/`len` are the stored value bytes: 2-state
  * is ceil(width/8) bytes big-endian (at most 8), REAL the 8 bytes of a
@@ -170,8 +175,36 @@ typedef void (*trl_txn_cb_t)(uint32_t txn_type, uint32_t stream_inst, uint64_t t
 
 /* Calls cb for every value change, block by block in file order. Within a
  * block the changes are grouped by variable, not sorted by time. */
-trl_status_t trl_iter_vc(trl_reader_t *, trl_vc_cb, void *user);
-trl_status_t trl_reader_close(trl_reader_t *);
+TRL_API trl_status_t trl_iter_vc(trl_reader_t *, trl_vc_cb, void *user);
+
+/* Hierarchy walk events, in declaration order. Each hierarchy starts with
+ * TRL_HE_HIER (name = hierarchy name, scope_type = hierarchy kind); every
+ * TRL_HE_SCOPE is closed by a TRL_HE_UPSCOPE. */
+typedef enum {
+    TRL_HE_HIER = 0,
+    TRL_HE_SCOPE,
+    TRL_HE_UPSCOPE,
+    TRL_HE_VAR,
+    TRL_HE_STREAM
+} trl_hier_event_kind_t;
+
+typedef struct {
+    uint8_t kind;           /* trl_hier_event_kind_t */
+    uint32_t hier_id;
+    const char *name;       /* resolved, "" when unnamed; valid during the call */
+    uint8_t scope_type;     /* SCOPE: scope type; HIER: hierarchy kind */
+    uint32_t id;            /* VAR: var id; STREAM: stream instance id */
+    uint32_t type_id;       /* VAR: signal type id; STREAM: stream type id */
+    uint8_t encoding;       /* VAR: trl_signal_enc_t of the signal type */
+    uint32_t bit_width;     /* VAR: width of the signal type */
+    uint8_t dir;            /* VAR: direction */
+    uint32_t alias_of;      /* VAR: aliased var id, 0 = none */
+} trl_hier_event_t;
+
+typedef void (*trl_hier_cb)(const trl_hier_event_t *ev, void *user);
+TRL_API trl_status_t trl_iter_hier(trl_reader_t *, trl_hier_cb, void *user);
+TRL_API int trl_reader_timescale_exp(const trl_reader_t *);
+TRL_API trl_status_t trl_reader_close(trl_reader_t *);
 
 #ifdef __cplusplus
 }

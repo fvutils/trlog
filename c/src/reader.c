@@ -1,10 +1,30 @@
 #include "varint_internal.h"
+#include "trl_portable.h"
 
-static trl_status_t trl_reader_read_header(FILE *fp, uint8_t *type, uint8_t *flags, uint64_t *length) {
-    uint8_t hdr[TRL_BLOCK_HEADER_SIZE];
-    if (fread(hdr, 1, sizeof(hdr), fp) != sizeof(hdr)) {
-        return feof(fp) ? TRL_ERR_IO : TRL_ERR_IO;
+size_t trl_reader_src_read(trl_reader_t *r, void *buf, size_t n) {
+    if (r->fp) return fread(buf, 1, n, r->fp);
+    size_t avail = r->mem_pos < r->mem_len ? r->mem_len - r->mem_pos : 0;
+    if (n > avail) n = avail;
+    if (n) memcpy(buf, r->mem + r->mem_pos, n);
+    r->mem_pos += n;
+    return n;
+}
+
+int trl_reader_src_seek(trl_reader_t *r, uint64_t off) {
+    if (r->fp) {
+        clearerr(r->fp);
+        return trl_fseek64(r->fp, (int64_t)off, SEEK_SET);
     }
+    if (off > r->mem_len) return -1;
+    r->mem_pos = (size_t)off;
+    return 0;
+}
+
+/* Reads the next block header. Any short read (clean end of data or a
+ * truncated trailing header) is TRL_ERR_IO; callers stop there. */
+static trl_status_t trl_reader_read_header(trl_reader_t *r, uint8_t *type, uint8_t *flags, uint64_t *length) {
+    uint8_t hdr[TRL_BLOCK_HEADER_SIZE];
+    if (trl_reader_src_read(r, hdr, sizeof(hdr)) != sizeof(hdr)) return TRL_ERR_IO;
     *type = hdr[0];
     *flags = hdr[1];
     *length = trl_read_le64(hdr + 2);
@@ -13,21 +33,17 @@ static trl_status_t trl_reader_read_header(FILE *fp, uint8_t *type, uint8_t *fla
 
 static trl_status_t trl_reader_scan(trl_reader_t *r) {
     trl_status_t st = TRL_OK;
-    if (fseek(r->fp, 0, SEEK_SET) != 0) return TRL_ERR_IO;
+    if (trl_reader_src_seek(r, 0) != 0) return TRL_ERR_IO;
     while (1) {
-        long off = ftell(r->fp);
         uint8_t type = 0, flags = 0;
         uint64_t length = 0;
-        if (feof(r->fp)) break;
-        if (fgetc(r->fp) == EOF) break;
-        fseek(r->fp, off, SEEK_SET);
-        st = trl_reader_read_header(r->fp, &type, &flags, &length);
+        st = trl_reader_read_header(r, &type, &flags, &length);
         if (st != TRL_OK) break;
         if (length < TRL_BLOCK_HEADER_SIZE) return TRL_ERR_CORRUPT;
         size_t payload_len = (size_t)(length - TRL_BLOCK_HEADER_SIZE);
         uint8_t *payload = payload_len ? (uint8_t *)malloc(payload_len) : NULL;
         if (payload_len && !payload) return TRL_ERR_OOM;
-        if (payload_len && fread(payload, 1, payload_len, r->fp) != payload_len) { free(payload); return TRL_ERR_IO; }
+        if (payload_len && trl_reader_src_read(r, payload, payload_len) != payload_len) { free(payload); return TRL_ERR_IO; }
         if (type == TRL_BLK_STR_TABLE) {
             st = trl_string_table_decode_payload(&r->strtab, payload, payload_len, flags);
             if (st != TRL_OK) { free(payload); return st; }
@@ -51,15 +67,12 @@ static trl_status_t trl_reader_scan(trl_reader_t *r) {
         }
         free(payload);
     }
-    clearerr(r->fp);
+    /* No file-header block: empty or not a trace at all. */
+    if (r->version_major == 0) return TRL_ERR_MAGIC;
     return TRL_OK;
 }
 
-trl_reader_t *trl_reader_open(const char *path) {
-    trl_reader_t *r = (trl_reader_t *)calloc(1, sizeof(trl_reader_t));
-    if (!r) return NULL;
-    r->fp = fopen(path, "rb");
-    if (!r->fp) { free(r); return NULL; }
+static trl_reader_t *trl_reader_init(trl_reader_t *r) {
     trl_string_table_init(&r->strtab);
     trl_type_registry_init(&r->typereg);
     trl_index_init(&r->index);
@@ -71,23 +84,36 @@ trl_reader_t *trl_reader_open(const char *path) {
     return r;
 }
 
+trl_reader_t *trl_reader_open(const char *path) {
+    trl_reader_t *r = (trl_reader_t *)calloc(1, sizeof(trl_reader_t));
+    if (!r) return NULL;
+    r->fp = fopen(path, "rb");
+    if (!r->fp) { free(r); return NULL; }
+    return trl_reader_init(r);
+}
+
+trl_reader_t *trl_reader_open_mem(const void *buf, size_t len) {
+    if (!buf && len) return NULL;
+    trl_reader_t *r = (trl_reader_t *)calloc(1, sizeof(trl_reader_t));
+    if (!r) return NULL;
+    r->mem = (const uint8_t *)buf;
+    r->mem_len = len;
+    return trl_reader_init(r);
+}
+
 trl_status_t trl_iter_vc(trl_reader_t *r, trl_vc_cb cb, void *user) {
     trl_status_t st = TRL_OK;
-    if (fseek(r->fp, 0, SEEK_SET) != 0) return TRL_ERR_IO;
+    if (trl_reader_src_seek(r, 0) != 0) return TRL_ERR_IO;
     while (1) {
-        long off = ftell(r->fp);
         uint8_t type = 0, flags = 0;
         uint64_t length = 0;
-        if (feof(r->fp)) break;
-        if (fgetc(r->fp) == EOF) break;
-        fseek(r->fp, off, SEEK_SET);
-        st = trl_reader_read_header(r->fp, &type, &flags, &length);
+        st = trl_reader_read_header(r, &type, &flags, &length);
         if (st != TRL_OK) break;
         if (length < TRL_BLOCK_HEADER_SIZE) return TRL_ERR_CORRUPT;
         size_t payload_len = (size_t)(length - TRL_BLOCK_HEADER_SIZE);
         uint8_t *payload = payload_len ? (uint8_t *)malloc(payload_len) : NULL;
         if (payload_len && !payload) return TRL_ERR_OOM;
-        if (payload_len && fread(payload, 1, payload_len, r->fp) != payload_len) { free(payload); return TRL_ERR_IO; }
+        if (payload_len && trl_reader_src_read(r, payload, payload_len) != payload_len) { free(payload); return TRL_ERR_IO; }
         if (type == TRL_BLK_VC_DATA) {
             /* Dispatch decode through the registered core value-change codec
              * (design §4.3); the wrapper calls the same trl_vc_iter_payload. */
@@ -112,8 +138,33 @@ trl_status_t trl_iter_vc(trl_reader_t *r, trl_vc_cb cb, void *user) {
             free(payload);
         }
     }
-    clearerr(r->fp);
     return TRL_OK;
+}
+
+trl_status_t trl_iter_hier(trl_reader_t *r, trl_hier_cb cb, void *user) {
+    trl_status_t st = TRL_OK;
+    if (!r || !cb) return TRL_ERR_INVALID;
+    if (trl_reader_src_seek(r, 0) != 0) return TRL_ERR_IO;
+    while (1) {
+        uint8_t type = 0, flags = 0;
+        uint64_t length = 0;
+        st = trl_reader_read_header(r, &type, &flags, &length);
+        if (st != TRL_OK) break;
+        if (length < TRL_BLOCK_HEADER_SIZE) return TRL_ERR_CORRUPT;
+        size_t payload_len = (size_t)(length - TRL_BLOCK_HEADER_SIZE);
+        uint8_t *payload = payload_len ? (uint8_t *)malloc(payload_len) : NULL;
+        if (payload_len && !payload) return TRL_ERR_OOM;
+        if (payload_len && trl_reader_src_read(r, payload, payload_len) != payload_len) { free(payload); return TRL_ERR_IO; }
+        if (type == TRL_BLK_HIERARCHY)
+            st = trl_hierarchy_walk_payload(payload, payload_len, flags, &r->strtab, &r->typereg, cb, user);
+        free(payload);
+        if (st != TRL_OK) return st;
+    }
+    return TRL_OK;
+}
+
+int trl_reader_timescale_exp(const trl_reader_t *r) {
+    return r ? r->timescale_exp : 0;
 }
 
 trl_status_t trl_reader_close(trl_reader_t *r) {

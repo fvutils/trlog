@@ -1,0 +1,11 @@
+# The native build inputs live outside the Python package; ship them in the
+# sdist so it builds from source. zlib and lz4 are the subset of their trees
+# that c/cmake/trl_deps.cmake compiles (fetched by `ivpm update` into packages/).
+include CMakeLists.txt
+include ivpm.yaml
+include LICENSE
+recursive-include c *.c *.cpp *.h *.txt *.cmake
+recursive-include vpi *.c *.cpp *.h *.sv *.txt
+recursive-include sv/src *.sv *.svh
+include packages/zlib/*.c packages/zlib/*.h packages/zlib/LICENSE
+include packages/lz4/lib/lz4.c packages/lz4/lib/lz4.h packages/lz4/lib/LICENSE

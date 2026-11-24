@@ -21,9 +21,16 @@ jobs:
       - name: Install build + test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake zlib1g-dev liblz4-dev
+          sudo apt-get install -y cmake
           python -m pip install --upgrade pip
           python -m pip install pytest lz4 zstandard
+
+      - name: Fetch zlib + lz4 sources
+        # libtrl links its own static zlib/lz4 (c/cmake/trl_deps.cmake); the
+        # tags match the `default` dep-set in ivpm.yaml.
+        run: |
+          git clone -q --depth 1 -b v1.3.1 https://github.com/madler/zlib.git packages/zlib
+          git clone -q --depth 1 -b v1.10.0 https://github.com/lz4/lz4.git packages/lz4
 
       - name: Build C library + tests
         run: |
@@ -50,3 +57,43 @@ jobs:
       # coverage in this phase is the C `ctest` harness above plus the
       # cross-impl parity test. Re-enable a full native pytest run once the
       # binding is complete (later phases).
+
+  build-and-test-windows:
+    # MSVC build of libtrl, trl_sv and trlog_vpi plus the C and Python tests.
+    # Not yet seen green (it cannot be run off GitHub): it does not gate
+    # merges until it has passed once; then drop continue-on-error.
+    runs-on: windows-latest
+    continue-on-error: true
+    env:
+      PYTHONPATH: python/src
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: python -m pip install pytest lz4 zstandard
+
+      - name: Fetch zlib + lz4 sources
+        run: |
+          git clone -q --depth 1 -b v1.3.1 https://github.com/madler/zlib.git packages/zlib
+          git clone -q --depth 1 -b v1.10.0 https://github.com/lz4/lz4.git packages/lz4
+
+      - name: Build C library, VPI library + tests (MSVC)
+        # One output directory, so the test programs find trl.dll beside them.
+        run: |
+          cmake -S . -B build -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$PWD/build/bin"
+          cmake --build build --config Release -j
+
+      - name: Run C tests (ctest)
+        run: ctest --test-dir build/c -C Release --output-on-failure
+
+      - name: Run Python tests
+        run: |
+          export TRL_LIBRARY_PATH="$PWD/build/bin/Release/trl.dll"
+          pytest tests/ -q

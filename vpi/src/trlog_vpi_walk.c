@@ -36,7 +36,7 @@ int trlog_vpi_match_signal(const char *full_path) {
     if (g_trlog.pattern_count == 0)
         return 1;
     for (int i = 0; i < g_trlog.pattern_count; ++i) {
-        if (fnmatch(g_trlog.patterns[i], full_path, 0) == 0)
+        if (trl_glob_match(g_trlog.patterns[i], full_path))
             return 1;
     }
     return 0;

@@ -44,32 +44,35 @@ typedef struct trl_rstream trl_rstream_t;
 typedef struct trl_rschema trl_rschema_t;
 typedef struct trl_cursor  trl_cursor_t;
 
-trl_rdb_t    *trl_rdb_open(const char *name, const char *path);
-trl_rdb_t    *trl_rdb_find(const char *name);
-trl_status_t  trl_rdb_close(trl_rdb_t *);
+TRL_API trl_rdb_t    *trl_rdb_open(const char *name, const char *path);
+/* Like trl_rdb_open, reading the trace from memory; the buffer is borrowed
+ * as in trl_reader_open_mem and must outlive trl_rdb_close. */
+TRL_API trl_rdb_t    *trl_rdb_open_mem(const char *name, const void *buf, size_t len);
+TRL_API trl_rdb_t    *trl_rdb_find(const char *name);
+TRL_API trl_status_t  trl_rdb_close(trl_rdb_t *);
 
-uint32_t       trl_rdb_num_streams(trl_rdb_t *);
-trl_rstream_t *trl_rdb_stream_at(trl_rdb_t *, uint32_t i);
-trl_rstream_t *trl_rdb_stream_find(trl_rdb_t *, const char *path);
-const char    *trl_rstream_path(const trl_rstream_t *);
-uint32_t       trl_rstream_inst_id(const trl_rstream_t *);
+TRL_API uint32_t       trl_rdb_num_streams(trl_rdb_t *);
+TRL_API trl_rstream_t *trl_rdb_stream_at(trl_rdb_t *, uint32_t i);
+TRL_API trl_rstream_t *trl_rdb_stream_find(trl_rdb_t *, const char *path);
+TRL_API const char    *trl_rstream_path(const trl_rstream_t *);
+TRL_API uint32_t       trl_rstream_inst_id(const trl_rstream_t *);
 
 /* Resolves a string-table id from a cursor's metas/links (TR_META's
  * key_sid/val_sid, TR_LINK's label_sid). STRING attribute values are not
  * ids: the cursor returns them decoded, in trl_attr_t.value.str. NULL if
  * the id is out of range. */
-const char    *trl_rdb_string_lookup(trl_rdb_t *, uint32_t sid);
+TRL_API const char    *trl_rdb_string_lookup(trl_rdb_t *, uint32_t sid);
 
 /* Transaction-schema introspection, resolved from the file's type registry.
  * A schema name that was re-registered (trl_rec.h's ad-hoc field growth)
  * resolves to its newest/widest version. */
-const trl_rschema_t *trl_rdb_schema_find(trl_rdb_t *, const char *qualified_name);
-const trl_rschema_t *trl_rdb_schema_by_id(trl_rdb_t *, uint32_t schema_id);
-const char       *trl_rschema_name(const trl_rschema_t *);
-uint32_t          trl_rschema_num_fields(const trl_rschema_t *);
-int32_t           trl_rschema_field_index(const trl_rschema_t *, const char *name);
-const char       *trl_rschema_field_name(const trl_rschema_t *, uint32_t f);
-trl_field_type_t  trl_rschema_field_type(const trl_rschema_t *, uint32_t f);
+TRL_API const trl_rschema_t *trl_rdb_schema_find(trl_rdb_t *, const char *qualified_name);
+TRL_API const trl_rschema_t *trl_rdb_schema_by_id(trl_rdb_t *, uint32_t schema_id);
+TRL_API const char       *trl_rschema_name(const trl_rschema_t *);
+TRL_API uint32_t          trl_rschema_num_fields(const trl_rschema_t *);
+TRL_API int32_t           trl_rschema_field_index(const trl_rschema_t *, const char *name);
+TRL_API const char       *trl_rschema_field_name(const trl_rschema_t *, uint32_t f);
+TRL_API trl_field_type_t  trl_rschema_field_type(const trl_rschema_t *, uint32_t f);
 
 typedef struct {
     uint8_t  link_type;
@@ -101,10 +104,10 @@ typedef struct {
 
 /* stream == NULL means every stream in the db. Narrow further with
  * trl_cursor_add_stream before the first trl_cursor_next call. */
-trl_cursor_t *trl_cursor_new(trl_rdb_t *, trl_rstream_t *stream, uint64_t t_from, uint64_t t_to);
-trl_status_t  trl_cursor_add_stream(trl_cursor_t *, trl_rstream_t *);
-int           trl_cursor_next(trl_cursor_t *, trl_txn_hdr_t *out);   /* 0 = end */
-void          trl_cursor_free(trl_cursor_t *);
+TRL_API trl_cursor_t *trl_cursor_new(trl_rdb_t *, trl_rstream_t *stream, uint64_t t_from, uint64_t t_to);
+TRL_API trl_status_t  trl_cursor_add_stream(trl_cursor_t *, trl_rstream_t *);
+TRL_API int           trl_cursor_next(trl_cursor_t *, trl_txn_hdr_t *out);   /* 0 = end */
+TRL_API void          trl_cursor_free(trl_cursor_t *);
 
 #ifdef __cplusplus
 }

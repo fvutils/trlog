@@ -11,7 +11,6 @@
 #include <string.h>
 
 #include <stdlib.h>
-#include <unistd.h>
 
 #include "trl/trl.h"
 #include "trl/trl_codec.h"
@@ -73,10 +72,9 @@ int main(void) {
     /* A codec that leaves open_writer/finalize/close NULL can be selected,
      * deselected, and used through trl_writer_close without crashing. */
     {
-        char path[] = "/tmp/test_codec_nulls_XXXXXX";
-        int fd = mkstemp(path);
-        EXPECT(fd >= 0);
-        if (fd >= 0) close(fd);
+        /* In the working directory (ctest: the build dir), not /tmp, so
+         * the test needs no POSIX mkstemp and also runs on Windows. */
+        const char *path = "test_codec_nulls.trl";
         trl_writer_t *w = trl_writer_open(path, -9, TRL_COMPRESS_NONE);
         EXPECT(w != NULL);
         if (w) {

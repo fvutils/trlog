@@ -1,8 +1,20 @@
 package:
   name: trlog
+  default-dep-set: default-dev
 
   dep-sets:
+  # C sources of libtrl's compression deps, built statically from
+  # c/cmake/trl_deps.cmake (unless configured with -DTRL_SYSTEM_DEPS=ON).
+  - name: default
+    deps:
+    - name: zlib
+      url: https://github.com/madler/zlib.git
+      tag: v1.3.1
+    - name: lz4
+      url: https://github.com/lz4/lz4.git
+      tag: v1.10.0
   - name: default-dev
+    uses: default
     deps:
     - name: pytest-dfm
       url: https://github.com/dv-flow/pytest-dfm.git
@@ -26,4 +38,27 @@ package:
       src: pypi
     - name: sphinx-rtd-theme
       src: pypi
+  # Emscripten toolchain for the WebAssembly build (wasm/CMakeLists.txt).
+  # Separate from default-dev: the bundle is ~300 MB. Pinned to a build hash
+  # (emsdk 6.0.9, the toolchain pssparser uses), never to `latest`. No `src:`
+  # key: the https URL auto-probes to the http fetcher (`src: url` fetches
+  # nothing). Linux x86_64 only for now. Environment: scripts/wasm-env.sh.
+  - name: wasm-build
+    deps:
+    - name: emsdk
+      cache: true
+      url: https://storage.googleapis.com/webassembly/emscripten-releases-builds/linux/f04ea239d533260dd1db760dd2d668d5f9a88d6b/wasm-binaries.tar.xz
+      type: raw
+  # Everything the TypeScript/WASM package needs:
+  #   ivpm update -d ts-build
+  #   source scripts/wasm-env.sh
+  #   emcmake cmake -S wasm -B build-wasm -DCMAKE_BUILD_TYPE=Release
+  #   cmake --build build-wasm -j
+  # Ask for ts-build from the start: ivpm refuses a later run with a
+  # different dep-set (delete packages/ivpm.json to switch).
+  - name: ts-build
+    uses:
+    - default-dev
+    - wasm-build
+    deps: []
 

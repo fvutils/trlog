@@ -201,7 +201,7 @@ static void write_signal_value(size_t idx, uint64_t sim_time) {
             p->time     = sim_time;
             p->enc      = enc;
             p->flags    = TRLOG_PENDING_FLAG_STR;
-            p->heap_data = (uint8_t *)strdup(s);
+            p->heap_data = (uint8_t *)trl_strdup(s);
             p->heap_len  = p->heap_data ? (uint32_t)strlen(s) + 1 : 0;
         } else {
             trl_vc_change_str(g_trlog.writer, var_id, sim_time, s);

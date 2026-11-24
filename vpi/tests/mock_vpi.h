@@ -22,6 +22,7 @@ typedef void          *vpiHandle;
 #define vpiSimTime        2
 #define vpiVectorVal      9
 #define vpiObjTypeVal    12
+#define vpiSuppressVal   13
 #define vpiStringVal      8
 #define vpiRealVal        7
 #define vpiBinStrVal      1

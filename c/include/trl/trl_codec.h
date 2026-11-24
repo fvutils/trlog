@@ -20,6 +20,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "trl/trl_api.h"
 
 #include "trl/trl.h"
 
@@ -125,15 +126,15 @@ typedef struct trl_txn_codec {
  * the registry is full. The id string itself is not validated. The registry
  * stores the pointer; the vtable must outlive the trace.
  * ----------------------------------------------------------------------- */
-int trl_register_vc_codec(const trl_vc_codec_t *codec);
-int trl_register_txn_codec(const trl_txn_codec_t *codec);
+TRL_API int trl_register_vc_codec(const trl_vc_codec_t *codec);
+TRL_API int trl_register_txn_codec(const trl_txn_codec_t *codec);
 
 /* Register the core codecs (core.valuechange, core.record). Runs
  * automatically from a library constructor; call it explicitly when a static
  * link drops the constructor. Idempotent. */
-void trl_register_core_codecs(void);
-const trl_vc_codec_t  *trl_lookup_vc_codec(const char *codec_id);
-const trl_txn_codec_t *trl_lookup_txn_codec(const char *codec_id);
+TRL_API void trl_register_core_codecs(void);
+TRL_API const trl_vc_codec_t  *trl_lookup_vc_codec(const char *codec_id);
+TRL_API const trl_txn_codec_t *trl_lookup_txn_codec(const char *codec_id);
 
 /* ----------------------------------------------------------------------- *
  * Storage SPI surface offered on `trl_store` (subset; grows in later phases).
@@ -141,10 +142,10 @@ const trl_txn_codec_t *trl_lookup_txn_codec(const char *codec_id);
  * ----------------------------------------------------------------------- */
 
 /* Intern a string in the trace's string table (write side). Returns the id. */
-uint32_t trl_store_intern(trl_store *st, const char *s);
+TRL_API uint32_t trl_store_intern(trl_store *st, const char *s);
 
 /* Append raw bytes (already block-framed) into a block-output buffer. */
-int trl_blkout_append(trl_blkout *out, const uint8_t *data, size_t len);
+TRL_API int trl_blkout_append(trl_blkout *out, const uint8_t *data, size_t len);
 
 /* ----------------------------------------------------------------------- *
  * Phase 3.5 (ctypes bridge): writer codec selection + the value-change
@@ -160,7 +161,7 @@ int trl_blkout_append(trl_blkout *out, const uint8_t *data, size_t len);
  * and its per-stream state threaded through encode_block/finalize/close. Pass
  * NULL to revert to the core value-change codec. Returns 0 on success, non-zero
  * if the id is unknown. */
-int trl_writer_set_vc_codec(trl_writer_t *w, const char *codec_id);
+TRL_API int trl_writer_set_vc_codec(trl_writer_t *w, const char *codec_id);
 
 /* Value-change kinds reported by the accessor (mirror trl_vc_value_kind_t). */
 typedef enum {
@@ -172,14 +173,14 @@ typedef enum {
 
 /* The current block's accumulated value-changes, flattened var-major to a
  * linear index. Valid only inside encode_block (write side). */
-size_t   trl_store_vc_change_count(trl_store *st);
-uint64_t trl_store_vc_start_time(trl_store *st);
-uint64_t trl_store_vc_end_time(trl_store *st);
+TRL_API size_t   trl_store_vc_change_count(trl_store *st);
+TRL_API uint64_t trl_store_vc_start_time(trl_store *st);
+TRL_API uint64_t trl_store_vc_end_time(trl_store *st);
 
 /* Fetch the i-th change. Out-params may be NULL. `kind` is a
  * trl_vc_change_kind_t; `u64val` is meaningful for the U64 kind (this slice).
  * Returns 0 on success, non-zero if i is out of range. */
-int trl_store_vc_change_at(trl_store *st, size_t i, uint32_t *var_id,
+TRL_API int trl_store_vc_change_at(trl_store *st, size_t i, uint32_t *var_id,
                            uint64_t *time, uint32_t *kind, uint64_t *u64val);
 
 #ifdef __cplusplus

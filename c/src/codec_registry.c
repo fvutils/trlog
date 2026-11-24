@@ -285,7 +285,19 @@ void trl_register_core_codecs(void) {
     trl_register_txn_codec(&CORE_TXN_CODEC);
 }
 
+#if defined(_MSC_VER)
+/* MSVC has no constructor attribute: put a pointer in the CRT's initializer
+ * table (.CRT$XCU), and keep the linker from dropping it (x64 symbol name). */
+static void __cdecl trl_register_core_codecs_ctor(void) {
+    trl_register_core_codecs();
+}
+#pragma section(".CRT$XCU", read)
+__declspec(allocate(".CRT$XCU"))
+void (__cdecl *trl_register_core_codecs_ctor_ptr)(void) = trl_register_core_codecs_ctor;
+#pragma comment(linker, "/include:trl_register_core_codecs_ctor_ptr")
+#else
 __attribute__((constructor))
 static void trl_register_core_codecs_ctor(void) {
     trl_register_core_codecs();
 }
+#endif

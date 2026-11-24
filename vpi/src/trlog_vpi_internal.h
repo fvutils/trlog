@@ -10,13 +10,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include <fnmatch.h>
 
 /* Include the simulator VPI header unless the mock test layer is in use. */
 #ifndef VPI_USER_H
 #include <vpi_user.h>
+#include "trlog_vpi_fn.h"
 #endif
 #include <trl/trl.h>
+#include "trl_portable.h"   /* from libtrl src/: strdup, glob */
 
 /* -------------------------------------------------------------------------
  * Limits and defaults

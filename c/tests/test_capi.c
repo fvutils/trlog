@@ -103,16 +103,65 @@ static void test_rec(const char *path) {
     EXPECT(trl_db_close(db) == TRL_OK, "db close");
 }
 
+/* trl_iter_hier reports hierarchy, scopes, vars (with signal type) and
+ * upscopes in declaration order, skipping attributes. */
+typedef struct { char log[512]; size_t n; } hier_log_t;
+
+static void hier_log_cb(const trl_hier_event_t *ev, void *user) {
+    hier_log_t *l = (hier_log_t *)user;
+    static const char *k[] = { "H", "S", "U", "V", "T" };
+    int w = snprintf(l->log + l->n, sizeof(l->log) - l->n, "%s:%s", k[ev->kind], ev->name);
+    if (w > 0) l->n += (size_t)w;
+    if (ev->kind == TRL_HE_VAR) {
+        w = snprintf(l->log + l->n, sizeof(l->log) - l->n, "#%u/e%u/w%u/d%u",
+                     ev->id, ev->encoding, ev->bit_width, ev->dir);
+        if (w > 0) l->n += (size_t)w;
+    }
+    if (l->n < sizeof(l->log) - 1) l->log[l->n++] = ' ', l->log[l->n] = 0;
+}
+
+static void test_iter_hier(const char *path) {
+    trl_writer_t *w = trl_writer_open(path, -9, TRL_COMPRESS_ZLIB);
+    EXPECT(w != NULL, "writer open");
+    if (!w) return;
+    uint32_t st8 = trl_add_signal_type(w, TRL_SE_2STATE, 8, 0);
+    uint32_t streal = trl_add_signal_type(w, TRL_SE_REAL, 64, 0);
+    trl_begin_hierarchy(w, 1, 0, trl_intern(w, "design"));
+    trl_hier_begin_scope(w, 0, trl_intern(w, "top"), 0, 0, 0);
+    trl_hier_add_attr(w, trl_intern(w, "k"), trl_intern(w, "v"));
+    uint32_t a = trl_hier_add_var(w, trl_intern(w, "clk"), st8, 1, 0, 0);
+    trl_hier_begin_scope(w, 0, trl_intern(w, "u"), 0, 0, 0);
+    uint32_t b = trl_hier_add_var(w, trl_intern(w, "r"), streal, 0, 0, 0);
+    trl_hier_end_scope(w);
+    trl_hier_end_scope(w);
+    EXPECT(trl_flush_hierarchy(w) == TRL_OK, "flush hierarchy");
+    EXPECT(trl_writer_close(w) == TRL_OK, "writer close");
+
+    trl_reader_t *r = trl_reader_open(path);
+    EXPECT(r != NULL, "reader open");
+    if (!r) return;
+    EXPECT(trl_reader_timescale_exp(r) == -9, "timescale");
+    hier_log_t l = { {0}, 0 };
+    EXPECT(trl_iter_hier(r, hier_log_cb, &l) == TRL_OK, "iter_hier");
+    char want[256];
+    snprintf(want, sizeof(want), "H:design S:top V:clk#%u/e0/w8/d1 S:u V:r#%u/e3/w64/d0 U: U: ", a, b);
+    if (strcmp(l.log, want) != 0) fprintf(stderr, "    got  '%s'\n    want '%s'\n", l.log, want);
+    EXPECT(strcmp(l.log, want) == 0, "iter_hier events");
+    trl_reader_close(r);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "usage: %s <out_dir>\n", argv[0]);
         return 2;
     }
-    char p1[4096], p2[4096];
+    char p1[4096], p2[4096], p3[4096];
     snprintf(p1, sizeof(p1), "%s/capi_hier.trl", argv[1]);
     snprintf(p2, sizeof(p2), "%s/capi_rec.trl", argv[1]);
     test_hier_attr(p1);
     test_rec(p2);
+    snprintf(p3, sizeof(p3), "%s/capi_iter_hier.trl", argv[1]);
+    test_iter_hier(p3);
     if (g_failures) {
         fprintf(stderr, "test_capi: %d failure(s)\n", g_failures);
         return 1;

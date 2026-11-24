@@ -1431,6 +1431,7 @@ verbs:
   export    write the selection to sqlite or parquet (-o OUT)
   batch     run one command per stdin line, opening the trace once
   help      help [agent|expr|refs|json|batch|VERB]
+  config    --libdir | --incdir | --svdir | --version: paths for C/DPI/VPI builds
 
 selection (most verbs): -s GLOB  -T TYPE  -t A..B (inclusive overlap)  and an EXPR
 output: text by default (formatted on a TTY, plain when piped); --json for an
@@ -1729,10 +1730,10 @@ def _unknown_verb(verb: str) -> None:
     if verb in PLANNED:
         raise QueryError("not_supported", f"'{verb}' is planned for phase "
                          f"{PLANNED[verb]} and not available yet", verb=verb)
-    dym = difflib.get_close_matches(verb, list(VERBS) + ["batch", "help"], n=3)
+    dym = difflib.get_close_matches(verb, list(VERBS) + ["batch", "help", "config"], n=3)
     raise QueryError("unknown_verb", f"unknown verb '{verb}'", verb=verb,
                      did_you_mean=dym or None,
-                     known_verbs=list(VERBS) + ["batch", "help"])
+                     known_verbs=list(VERBS) + ["batch", "help", "config"])
 
 
 def _join_dash_values(argv: List[str]) -> List[str]:
@@ -1748,6 +1749,39 @@ def _join_dash_values(argv: List[str]) -> List[str]:
         out.append(a)
         i += 1
     return out
+
+
+def cmd_config(argv: List[str]) -> int:
+    """``trlog config``: where the native libraries, headers and SV live.
+
+    Prints one directory per line, for simulator and compiler command
+    lines, e.g. ``-sv_lib $(trlog config --libdir)/trl_sv``.
+    """
+    from . import __version__
+    from ._libpath import get_libdirs, get_incdirs, get_svdirs
+    p = argparse.ArgumentParser(
+        prog="trlog config",
+        description="Print where trlog's native libraries, C headers and "
+                    "SystemVerilog package are installed.")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--libdir", action="store_true",
+                   help="directories holding libtrl, libtrl_sv and libtrlog_vpi")
+    g.add_argument("--incdir", action="store_true", help="C include directories")
+    g.add_argument("--svdir", action="store_true",
+                   help="directories holding trl_pkg.sv")
+    g.add_argument("--version", action="store_true", help="the trlog version")
+    try:
+        args = p.parse_args(argv)
+    except SystemExit as e:
+        return EXIT_ERROR if e.code else EXIT_MATCH
+    if args.version:
+        print(__version__)
+        return EXIT_MATCH
+    dirs = (get_libdirs() if args.libdir else
+            get_incdirs() if args.incdir else get_svdirs())
+    for d in dirs:
+        print(d)
+    return EXIT_MATCH if dirs else EXIT_NOMATCH
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1771,6 +1805,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_help(rest)
     if verb == "batch":
         return cmd_batch(rest)
+    if verb == "config":
+        return cmd_config(rest)
     want_json = "--json" in rest or "--jsonl" in rest
     try:
         if verb not in VERBS:

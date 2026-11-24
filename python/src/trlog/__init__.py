@@ -1,5 +1,7 @@
 """TRLOG — ZuSpec Trace binary format reader/writer."""
 
+from .__version__ import _pkg_version as __version__
+
 from ._types import (
     BlockType, HierKind, ScopeType, VarDir, SignalEncoding,
     FieldType, TxnRecordTag, LinkType, Radix, HierTag, AttrType,
@@ -15,6 +17,7 @@ from ._codec import (
     encode_field, decode_field,
 )
 from ._native import TrlWriter, TrlReader
+from ._libpath import get_libdirs, get_incdirs, get_svdirs
 from ._reader import ScopeNode
 from ._ext import ExtBlock
 from ._deps import DependencyGraph, Materializer, DependencyError
@@ -53,4 +56,5 @@ __all__ = [
     "CORE_VALUECHANGE", "CORE_RECORD", "CORE_BYTESPLIT", "CORE_DERIVED",
     "ZstError", "ZstMagicError", "ZstVersionError", "ZstFormatError",
     "ZstCompressionError", "ZstNoIndexError", "ZstCorruptError",
+    "get_libdirs", "get_incdirs", "get_svdirs",
 ]

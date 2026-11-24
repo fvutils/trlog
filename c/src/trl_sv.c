@@ -34,11 +34,15 @@
  * plain `int`; none of that needs svdpi.h, so this file has no dependency
  * on any particular simulator's DPI headers. */
 
+/* Every trl_sv_* function is a DPI-C import, so the simulator must find it
+ * in the library's export table (the library builds with hidden visibility). */
+#define TRL_SV_API TRL_DLL_EXPORT
+
 /* ----------------------------------------------------------------------- *
  * Database
  * ----------------------------------------------------------------------- */
 
-void *trl_sv_db_open(const char *name, const char *path, int timescale_exp,
+TRL_SV_API void *trl_sv_db_open(const char *name, const char *path, int timescale_exp,
                       int compress, int block_kb, int flags) {
     (void)flags;
     trl_db_cfg_t cfg;
@@ -50,57 +54,57 @@ void *trl_sv_db_open(const char *name, const char *path, int timescale_exp,
     return trl_db_open(name, &cfg);
 }
 
-void *trl_sv_db_find(const char *name) { return trl_db_find(name); }
+TRL_SV_API void *trl_sv_db_find(const char *name) { return trl_db_find(name); }
 
-int trl_sv_db_close(void *db) { return (int)trl_db_close((trl_db_t *)db); }
+TRL_SV_API int trl_sv_db_close(void *db) { return (int)trl_db_close((trl_db_t *)db); }
 
-int trl_sv_intern(void *db, const char *s) {
+TRL_SV_API int trl_sv_intern(void *db, const char *s) {
     return (int)trl_db_intern((trl_db_t *)db, s);
 }
 
-const char *trl_sv_last_error(void) { return trl_last_error(); }
+TRL_SV_API const char *trl_sv_last_error(void) { return trl_last_error(); }
 
 /* ----------------------------------------------------------------------- *
  * Types
  * ----------------------------------------------------------------------- */
 
-void *trl_sv_type_new(void *db, const char *name, void *scope) {
+TRL_SV_API void *trl_sv_type_new(void *db, const char *name, void *scope) {
     return trl_type_new((trl_db_t *)db, name, (trl_stream_t *)scope);
 }
 
-void *trl_sv_type_find(void *db, const char *name, void *scope) {
+TRL_SV_API void *trl_sv_type_find(void *db, const char *name, void *scope) {
     return trl_type_find((trl_db_t *)db, name, (trl_stream_t *)scope);
 }
 
-int trl_sv_type_add_field(void *t, const char *name, int kind, int width) {
+TRL_SV_API int trl_sv_type_add_field(void *t, const char *name, int kind, int width) {
     return trl_type_add_field((trl_rtype_t *)t, name, (trl_field_type_t)kind,
                                (uint32_t)width, NULL);
 }
 
-int trl_sv_type_field_get_or_add(void *t, const char *name, int kind, int width) {
+TRL_SV_API int trl_sv_type_field_get_or_add(void *t, const char *name, int kind, int width) {
     return trl_type_field_get_or_add((trl_rtype_t *)t, name, (trl_field_type_t)kind,
                                       (uint32_t)width);
 }
 
-int trl_sv_type_seal(void *t) { return (int)trl_type_seal((trl_rtype_t *)t); }
+TRL_SV_API int trl_sv_type_seal(void *t) { return (int)trl_type_seal((trl_rtype_t *)t); }
 
-const char *trl_sv_type_name(void *t) { return trl_type_name((const trl_rtype_t *)t); }
+TRL_SV_API const char *trl_sv_type_name(void *t) { return trl_type_name((const trl_rtype_t *)t); }
 
-int trl_sv_type_num_fields(void *t) { return (int)trl_type_num_fields((const trl_rtype_t *)t); }
+TRL_SV_API int trl_sv_type_num_fields(void *t) { return (int)trl_type_num_fields((const trl_rtype_t *)t); }
 
-int trl_sv_type_field_index(void *t, const char *name) {
+TRL_SV_API int trl_sv_type_field_index(void *t, const char *name) {
     return trl_type_field_index((const trl_rtype_t *)t, name);
 }
 
-const char *trl_sv_type_field_name(void *t, int f) {
+TRL_SV_API const char *trl_sv_type_field_name(void *t, int f) {
     return trl_type_field_name((const trl_rtype_t *)t, (uint32_t)f);
 }
 
-int trl_sv_type_field_kind(void *t, int f) {
+TRL_SV_API int trl_sv_type_field_kind(void *t, int f) {
     return (int)trl_type_field_type((const trl_rtype_t *)t, (uint32_t)f);
 }
 
-int trl_sv_type_field_width(void *t, int f) {
+TRL_SV_API int trl_sv_type_field_width(void *t, int f) {
     return (int)trl_type_field_width((const trl_rtype_t *)t, (uint32_t)f);
 }
 
@@ -108,7 +112,7 @@ int trl_sv_type_field_width(void *t, int f) {
  * Streams
  * ----------------------------------------------------------------------- */
 
-void *trl_sv_stream_new(void *db, void *parent, const char *name, const char *kind,
+TRL_SV_API void *trl_sv_stream_new(void *db, void *parent, const char *name, const char *kind,
                          void *dflt_type, int *enabled_out) {
     int enabled = 1;
     trl_stream_t *s = trl_stream_new((trl_db_t *)db, (trl_stream_t *)parent, name, kind,
@@ -117,60 +121,60 @@ void *trl_sv_stream_new(void *db, void *parent, const char *name, const char *ki
     return s;
 }
 
-void *trl_sv_stream_find(void *db, const char *path) {
+TRL_SV_API void *trl_sv_stream_find(void *db, const char *path) {
     return trl_stream_find((trl_db_t *)db, path);
 }
 
-void *trl_sv_stream_adhoc_type(void *s) { return trl_stream_adhoc_type((trl_stream_t *)s); }
+TRL_SV_API void *trl_sv_stream_adhoc_type(void *s) { return trl_stream_adhoc_type((trl_stream_t *)s); }
 
-int trl_sv_stream_inst_id(void *s) { return (int)trl_stream_inst_id((const trl_stream_t *)s); }
+TRL_SV_API int trl_sv_stream_inst_id(void *s) { return (int)trl_stream_inst_id((const trl_stream_t *)s); }
 
 /* ----------------------------------------------------------------------- *
  * Recording
  * ----------------------------------------------------------------------- */
 
-long long trl_sv_record(void *s, void *t, long long start, long long end, long long parent,
+TRL_SV_API long long trl_sv_record(void *s, void *t, long long start, long long end, long long parent,
                          const long long *v, int n) {
     return (long long)trl_rec_full((trl_stream_t *)s, (trl_rtype_t *)t,
                                     (uint64_t)start, (uint64_t)end, (uint64_t)parent,
                                     (const uint64_t *)v, (uint32_t)n);
 }
 
-void *trl_sv_begin(void *s, void *t, long long start, long long parent) {
+TRL_SV_API void *trl_sv_begin(void *s, void *t, long long start, long long parent) {
     return trl_rec_begin((trl_stream_t *)s, (trl_rtype_t *)t, (uint64_t)start, (uint64_t)parent);
 }
 
-long long trl_sv_txn_id(void *x) { return (long long)trl_rec_id((const trl_txn_t *)x); }
+TRL_SV_API long long trl_sv_txn_id(void *x) { return (long long)trl_rec_id((const trl_txn_t *)x); }
 
-void trl_sv_set_int(void *x, int f, long long v) {
+TRL_SV_API void trl_sv_set_int(void *x, int f, long long v) {
     trl_rec_set_u64((trl_txn_t *)x, (uint32_t)f, (uint64_t)v);
 }
 
-void trl_sv_set_real(void *x, int f, double v) {
+TRL_SV_API void trl_sv_set_real(void *x, int f, double v) {
     trl_rec_set_f64((trl_txn_t *)x, (uint32_t)f, v);
 }
 
-void trl_sv_set_str(void *x, int f, const char *v) {
+TRL_SV_API void trl_sv_set_str(void *x, int f, const char *v) {
     trl_rec_set_str((trl_txn_t *)x, (uint32_t)f, v);
 }
 
-void trl_sv_set_str_id(void *x, int f, int sid) {
+TRL_SV_API void trl_sv_set_str_id(void *x, int f, int sid) {
     trl_rec_set_str_id((trl_txn_t *)x, (uint32_t)f, (uint32_t)sid);
 }
 
-void trl_sv_link(void *x, long long tgt, int ltype, int label_sid) {
+TRL_SV_API void trl_sv_link(void *x, long long tgt, int ltype, int label_sid) {
     trl_rec_link((trl_txn_t *)x, (uint64_t)tgt, (uint8_t)ltype, (uint32_t)label_sid);
 }
 
-void trl_sv_link_id(void *db, long long src, long long tgt, int ltype, int label_sid) {
+TRL_SV_API void trl_sv_link_id(void *db, long long src, long long tgt, int ltype, int label_sid) {
     trl_rec_link_ids((trl_db_t *)db, (uint64_t)src, (uint64_t)tgt, (uint8_t)ltype, (uint32_t)label_sid);
 }
 
-void trl_sv_meta(void *x, int key_sid, int val_sid) {
+TRL_SV_API void trl_sv_meta(void *x, int key_sid, int val_sid) {
     trl_rec_meta((trl_txn_t *)x, (uint32_t)key_sid, (uint32_t)val_sid);
 }
 
-void trl_sv_end(void *x, long long end) {
+TRL_SV_API void trl_sv_end(void *x, long long end) {
     trl_rec_end((trl_txn_t *)x, (uint64_t)end);
 }
 
@@ -178,49 +182,49 @@ void trl_sv_end(void *x, long long end) {
  * Reading
  * ----------------------------------------------------------------------- */
 
-void *trl_sv_rdb_open(const char *name, const char *path) { return trl_rdb_open(name, path); }
-void *trl_sv_rdb_find(const char *name) { return trl_rdb_find(name); }
-int trl_sv_rdb_close(void *r) { return (int)trl_rdb_close((trl_rdb_t *)r); }
+TRL_SV_API void *trl_sv_rdb_open(const char *name, const char *path) { return trl_rdb_open(name, path); }
+TRL_SV_API void *trl_sv_rdb_find(const char *name) { return trl_rdb_find(name); }
+TRL_SV_API int trl_sv_rdb_close(void *r) { return (int)trl_rdb_close((trl_rdb_t *)r); }
 
-int trl_sv_rdb_num_streams(void *r) { return (int)trl_rdb_num_streams((trl_rdb_t *)r); }
+TRL_SV_API int trl_sv_rdb_num_streams(void *r) { return (int)trl_rdb_num_streams((trl_rdb_t *)r); }
 
-void *trl_sv_rdb_stream_at(void *r, int i) {
+TRL_SV_API void *trl_sv_rdb_stream_at(void *r, int i) {
     return trl_rdb_stream_at((trl_rdb_t *)r, (uint32_t)i);
 }
 
-void *trl_sv_rdb_stream_find(void *r, const char *path) {
+TRL_SV_API void *trl_sv_rdb_stream_find(void *r, const char *path) {
     return trl_rdb_stream_find((trl_rdb_t *)r, path);
 }
 
-const char *trl_sv_rstream_path(void *rs) { return trl_rstream_path((const trl_rstream_t *)rs); }
+TRL_SV_API const char *trl_sv_rstream_path(void *rs) { return trl_rstream_path((const trl_rstream_t *)rs); }
 
-int trl_sv_rstream_inst_id(void *rs) {
+TRL_SV_API int trl_sv_rstream_inst_id(void *rs) {
     return (int)trl_rstream_inst_id((const trl_rstream_t *)rs);
 }
 
-void *trl_sv_rdb_schema_find(void *r, const char *name) {
+TRL_SV_API void *trl_sv_rdb_schema_find(void *r, const char *name) {
     return (void *)trl_rdb_schema_find((trl_rdb_t *)r, name);
 }
 
-const char *trl_sv_rschema_name(void *sch) { return trl_rschema_name((const trl_rschema_t *)sch); }
+TRL_SV_API const char *trl_sv_rschema_name(void *sch) { return trl_rschema_name((const trl_rschema_t *)sch); }
 
-int trl_sv_rschema_num_fields(void *sch) {
+TRL_SV_API int trl_sv_rschema_num_fields(void *sch) {
     return (int)trl_rschema_num_fields((const trl_rschema_t *)sch);
 }
 
-int trl_sv_rschema_field_index(void *sch, const char *name) {
+TRL_SV_API int trl_sv_rschema_field_index(void *sch, const char *name) {
     return trl_rschema_field_index((const trl_rschema_t *)sch, name);
 }
 
-const char *trl_sv_rschema_field_name(void *sch, int f) {
+TRL_SV_API const char *trl_sv_rschema_field_name(void *sch, int f) {
     return trl_rschema_field_name((const trl_rschema_t *)sch, (uint32_t)f);
 }
 
-int trl_sv_rschema_field_kind(void *sch, int f) {
+TRL_SV_API int trl_sv_rschema_field_kind(void *sch, int f) {
     return (int)trl_rschema_field_type((const trl_rschema_t *)sch, (uint32_t)f);
 }
 
-const char *trl_sv_string_lookup(void *r, int sid) {
+TRL_SV_API const char *trl_sv_string_lookup(void *r, int sid) {
     return trl_rdb_string_lookup((trl_rdb_t *)r, (uint32_t)sid);
 }
 
@@ -242,7 +246,7 @@ struct trl_sv_cursor_state {
     int have_hdr;
 };
 
-void *trl_sv_cursor_new(void *r, void *rs, long long t_from, long long t_to) {
+TRL_SV_API void *trl_sv_cursor_new(void *r, void *rs, long long t_from, long long t_to) {
     struct trl_sv_cursor_state *st =
         (struct trl_sv_cursor_state *)calloc(1, sizeof(*st));
     if (!st) return NULL;
@@ -251,12 +255,12 @@ void *trl_sv_cursor_new(void *r, void *rs, long long t_from, long long t_to) {
     return st;
 }
 
-int trl_sv_cursor_add_stream(void *c, void *rs) {
+TRL_SV_API int trl_sv_cursor_add_stream(void *c, void *rs) {
     struct trl_sv_cursor_state *st = (struct trl_sv_cursor_state *)c;
     return (int)trl_cursor_add_stream(st->c, (trl_rstream_t *)rs);
 }
 
-int trl_sv_cursor_next(void *c, long long *txn_id, int *stream_inst_id, int *txn_type_id,
+TRL_SV_API int trl_sv_cursor_next(void *c, long long *txn_id, int *stream_inst_id, int *txn_type_id,
                         long long *start, long long *end, long long *parent,
                         int *attr_count, int *link_count, int *meta_count) {
     struct trl_sv_cursor_state *st = (struct trl_sv_cursor_state *)c;
@@ -282,11 +286,11 @@ static const trl_attr_t *cur_find_attr(struct trl_sv_cursor_state *st, int f) {
     return NULL;
 }
 
-int trl_sv_cur_has(void *c, int f) {
+TRL_SV_API int trl_sv_cur_has(void *c, int f) {
     return cur_find_attr((struct trl_sv_cursor_state *)c, f) != NULL;
 }
 
-long long trl_sv_cur_int(void *c, int f) {
+TRL_SV_API long long trl_sv_cur_int(void *c, int f) {
     const trl_attr_t *a = cur_find_attr((struct trl_sv_cursor_state *)c, f);
     if (!a) return 0;
     return (a->field_type == TRL_FT_I8 || a->field_type == TRL_FT_I16 ||
@@ -295,17 +299,17 @@ long long trl_sv_cur_int(void *c, int f) {
                : (long long)a->value.u64;
 }
 
-double trl_sv_cur_real(void *c, int f) {
+TRL_SV_API double trl_sv_cur_real(void *c, int f) {
     const trl_attr_t *a = cur_find_attr((struct trl_sv_cursor_state *)c, f);
     return a ? a->value.f64 : 0.0;
 }
 
-const char *trl_sv_cur_str(void *c, int f) {
+TRL_SV_API const char *trl_sv_cur_str(void *c, int f) {
     const trl_attr_t *a = cur_find_attr((struct trl_sv_cursor_state *)c, f);
     return (a && a->field_type == TRL_FT_STRING) ? a->value.str : "";
 }
 
-int trl_sv_cur_link(void *c, int i, long long *tgt, int *ltype, int *label_sid) {
+TRL_SV_API int trl_sv_cur_link(void *c, int i, long long *tgt, int *ltype, int *label_sid) {
     struct trl_sv_cursor_state *st = (struct trl_sv_cursor_state *)c;
     if (!st->have_hdr || i < 0 || (uint32_t)i >= st->hdr.link_count) return 0;
     const trl_txn_link_t *l = &st->hdr.links[i];
@@ -315,7 +319,7 @@ int trl_sv_cur_link(void *c, int i, long long *tgt, int *ltype, int *label_sid) 
     return 1;
 }
 
-int trl_sv_cur_meta_at(void *c, int i, int *key_sid, int *val_sid) {
+TRL_SV_API int trl_sv_cur_meta_at(void *c, int i, int *key_sid, int *val_sid) {
     struct trl_sv_cursor_state *st = (struct trl_sv_cursor_state *)c;
     if (!st->have_hdr || i < 0 || (uint32_t)i >= st->hdr.meta_count) return 0;
     const trl_txn_meta_t *m = &st->hdr.metas[i];
@@ -324,7 +328,7 @@ int trl_sv_cur_meta_at(void *c, int i, int *key_sid, int *val_sid) {
     return 1;
 }
 
-void trl_sv_cursor_free(void *c) {
+TRL_SV_API void trl_sv_cursor_free(void *c) {
     struct trl_sv_cursor_state *st = (struct trl_sv_cursor_state *)c;
     if (!st) return;
     trl_cursor_free(st->c);

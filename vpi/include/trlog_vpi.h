@@ -8,16 +8,26 @@
  * argument) should name "trlog_vpi_register" explicitly.
  */
 
+/* The simulator looks both symbols up by name, so the library exports them
+ * (it builds with hidden visibility; on Windows only marked symbols export). */
+#if defined(_WIN32) || defined(__CYGWIN__)
+#  define TRLOG_VPI_API __declspec(dllexport)
+#elif defined(__GNUC__) || defined(__clang__)
+#  define TRLOG_VPI_API __attribute__((visibility("default")))
+#else
+#  define TRLOG_VPI_API
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* Called by the simulator at elaboration time. */
-void trlog_vpi_register(void);
+TRLOG_VPI_API void trlog_vpi_register(void);
 
 /* Standard startup routine table used by simulators that scan for
  * vlog_startup_routines at library load time. */
-extern void (*vlog_startup_routines[])(void);
+extern TRLOG_VPI_API void (*vlog_startup_routines[])(void);
 
 #ifdef __cplusplus
 }

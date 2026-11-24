@@ -359,3 +359,107 @@ trl_status_t trl_hierarchy_decode_streams(const uint8_t *payload, size_t payload
     free(owned);
     return st;
 }
+
+static const char *trl_hier_name(const trl_string_table_t *strtab, uint64_t sid) {
+    const char *s = trl_string_table_lookup(strtab, (uint32_t)sid);
+    return s ? s : "";
+}
+
+trl_status_t trl_hierarchy_walk_payload(const uint8_t *payload, size_t payload_len, uint8_t flags,
+                                        const trl_string_table_t *strtab, const trl_type_registry_t *typereg,
+                                        trl_hier_cb cb, void *user) {
+    trl_status_t st = TRL_OK;
+    const uint8_t *data = payload;
+    size_t len = payload_len;
+    uint8_t *owned = NULL;
+    size_t offset = 0;
+    uint64_t hier_id = 0, name_id = 0, tmp = 0;
+    int scope_depth = 0;
+    trl_hier_event_t ev;
+
+    if (flags & TRL_FLAG_COMPRESSED) {
+        if (payload_len < 8) return TRL_ERR_CORRUPT;
+        uint64_t out_len = trl_read_le64(payload);
+        owned = (uint8_t *)malloc((size_t)out_len ? (size_t)out_len : 1);
+        if (!owned) return TRL_ERR_OOM;
+        st = trl_zlib_uncompress_buf(payload + 8, payload_len - 8, owned, (size_t)out_len);
+        if (st != TRL_OK) { free(owned); return st; }
+        data = owned;
+        len = (size_t)out_len;
+    }
+
+    /* Block header: hier_id, kind, name. */
+    memset(&ev, 0, sizeof(ev));
+    if ((st = trl_decode_uvarint(data, len, &offset, &hier_id)) != TRL_OK || offset >= len) {
+        free(owned);
+        return st != TRL_OK ? st : TRL_ERR_CORRUPT;
+    }
+    ev.scope_type = data[offset++];
+    if ((st = trl_decode_uvarint(data, len, &offset, &name_id)) != TRL_OK) { free(owned); return st; }
+    ev.kind = TRL_HE_HIER;
+    ev.hier_id = (uint32_t)hier_id;
+    ev.name = trl_hier_name(strtab, name_id);
+    cb(&ev, user);
+
+    while (st == TRL_OK && offset < len) {
+        uint8_t tag = data[offset++];
+        memset(&ev, 0, sizeof(ev));
+        ev.hier_id = (uint32_t)hier_id;
+        ev.name = "";
+        if (tag == TRL_H_SCOPE) {
+            if (offset >= len) { st = TRL_ERR_CORRUPT; break; }
+            ev.kind = TRL_HE_SCOPE;
+            ev.scope_type = data[offset++];
+            if ((st = trl_decode_uvarint(data, len, &offset, &name_id)) != TRL_OK) break;
+            for (int i = 0; st == TRL_OK && i < 3; ++i) st = trl_decode_uvarint(data, len, &offset, &tmp);
+            if (st != TRL_OK) break;
+            ev.name = trl_hier_name(strtab, name_id);
+            scope_depth++;
+            cb(&ev, user);
+        } else if (tag == TRL_H_UPSCOPE) {
+            if (scope_depth <= 0) { st = TRL_ERR_CORRUPT; break; }
+            scope_depth--;
+            ev.kind = TRL_HE_UPSCOPE;
+            cb(&ev, user);
+        } else if (tag == TRL_H_VAR) {
+            uint64_t var_id = 0, sig_type_id = 0, alias = 0;
+            if ((st = trl_decode_uvarint(data, len, &offset, &var_id)) != TRL_OK) break;
+            if ((st = trl_decode_uvarint(data, len, &offset, &name_id)) != TRL_OK) break;
+            if ((st = trl_decode_uvarint(data, len, &offset, &sig_type_id)) != TRL_OK) break;
+            if (offset >= len) { st = TRL_ERR_CORRUPT; break; }
+            ev.dir = data[offset++];
+            if ((st = trl_decode_uvarint(data, len, &offset, &alias)) != TRL_OK) break;
+            if ((st = trl_decode_uvarint(data, len, &offset, &tmp)) != TRL_OK) break;
+            if ((st = trl_decode_uvarint(data, len, &offset, &tmp)) != TRL_OK) break;
+            ev.kind = TRL_HE_VAR;
+            ev.id = (uint32_t)var_id;
+            ev.type_id = (uint32_t)sig_type_id;
+            ev.alias_of = (uint32_t)alias;
+            ev.name = trl_hier_name(strtab, name_id);
+            if (sig_type_id && sig_type_id <= typereg->signal_count) {
+                ev.encoding = typereg->signal_types[sig_type_id].encoding;
+                ev.bit_width = typereg->signal_types[sig_type_id].bit_width;
+            }
+            cb(&ev, user);
+        } else if (tag == TRL_H_STREAM) {
+            uint64_t inst = 0, stype = 0;
+            if ((st = trl_decode_uvarint(data, len, &offset, &inst)) != TRL_OK) break;
+            if ((st = trl_decode_uvarint(data, len, &offset, &stype)) != TRL_OK) break;
+            if ((st = trl_decode_uvarint(data, len, &offset, &name_id)) != TRL_OK) break;
+            ev.kind = TRL_HE_STREAM;
+            ev.id = (uint32_t)inst;
+            ev.type_id = (uint32_t)stype;
+            ev.name = trl_hier_name(strtab, name_id);
+            cb(&ev, user);
+        } else if (tag == TRL_H_ATTR) {
+            if ((st = trl_decode_uvarint(data, len, &offset, &tmp)) != TRL_OK) break;
+            st = trl_decode_uvarint(data, len, &offset, &tmp);
+        } else if (tag == TRL_H_ATTR2) {
+            st = trl_hierarchy_skip_attr2(data, len, &offset);
+        } else {
+            break;
+        }
+    }
+    free(owned);
+    return st;
+}

@@ -12,11 +12,11 @@
  * stream-set index section, nested-type introspection).
  */
 
-#include <fnmatch.h>
 #include <stdarg.h>
 
 #include "trl/trl_rec.h"
 #include "trl_internal.h"
+#include "trl_portable.h"
 
 #define TRL_DEFAULT_BLOCK_BYTES (64u * 1024u)
 #define TRL_HK_BEHAVIORAL 0x01
@@ -133,7 +133,7 @@ static int glob_list_match(const char *list, const char *path) {
         if (comma) {
             *comma = '\0';
         }
-        if (*tok && fnmatch(tok, path, 0) == 0) {
+        if (*tok && trl_glob_match(tok, path)) {
             return 1;
         }
         tok = comma ? comma + 1 : NULL;

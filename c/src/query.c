@@ -73,11 +73,11 @@ trl_rdb_t *trl_rdb_find(const char *name) {
     return NULL;
 }
 
-static trl_status_t read_block_at(FILE *fp, uint64_t offset, uint8_t *type, uint8_t *flags,
+static trl_status_t read_block_at(trl_reader_t *r, uint64_t offset, uint8_t *type, uint8_t *flags,
                                   uint8_t **payload, size_t *payload_len) {
     uint8_t hdr[TRL_BLOCK_HEADER_SIZE];
-    if (fseek(fp, (long)offset, SEEK_SET) != 0) return TRL_ERR_IO;
-    if (fread(hdr, 1, sizeof(hdr), fp) != sizeof(hdr)) return TRL_ERR_IO;
+    if (trl_reader_src_seek(r, offset) != 0) return TRL_ERR_IO;
+    if (trl_reader_src_read(r, hdr, sizeof(hdr)) != sizeof(hdr)) return TRL_ERR_IO;
     *type = hdr[0];
     *flags = hdr[1];
     uint64_t total_len = trl_read_le64(hdr + 2);
@@ -85,7 +85,7 @@ static trl_status_t read_block_at(FILE *fp, uint64_t offset, uint8_t *type, uint
     size_t plen = (size_t)(total_len - TRL_BLOCK_HEADER_SIZE);
     uint8_t *p = plen ? (uint8_t *)malloc(plen) : NULL;
     if (plen && !p) return TRL_ERR_OOM;
-    if (plen && fread(p, 1, plen, fp) != plen) { free(p); return TRL_ERR_IO; }
+    if (plen && trl_reader_src_read(r, p, plen) != plen) { free(p); return TRL_ERR_IO; }
     *payload = p;
     *payload_len = plen;
     return TRL_OK;
@@ -100,11 +100,24 @@ static void rschema_free(trl_rschema_t *s) {
     free(s->name);
 }
 
+static trl_rdb_t *rdb_from_reader(const char *name, trl_reader_t *r);
+
 trl_rdb_t *trl_rdb_open(const char *name, const char *path) {
     if (trl_rdb_find(name)) return NULL;
     trl_reader_t *r = trl_reader_open(path);
     if (!r) return NULL;
+    return rdb_from_reader(name, r);
+}
 
+trl_rdb_t *trl_rdb_open_mem(const char *name, const void *buf, size_t len) {
+    if (trl_rdb_find(name)) return NULL;
+    trl_reader_t *r = trl_reader_open_mem(buf, len);
+    if (!r) return NULL;
+    return rdb_from_reader(name, r);
+}
+
+/* Takes ownership of r (closed on failure). */
+static trl_rdb_t *rdb_from_reader(const char *name, trl_reader_t *r) {
     trl_rdb_t *db = (trl_rdb_t *)calloc(1, sizeof(*db));
     if (!db) { trl_reader_close(r); return NULL; }
     db->name = trl_strdup_len(name, strlen(name));
@@ -118,7 +131,7 @@ trl_rdb_t *trl_rdb_open(const char *name, const char *path) {
     for (size_t i = 0; i < r->index.hier_count; ++i) {
         uint8_t type, flags;
         uint8_t *payload; size_t payload_len;
-        if (read_block_at(r->fp, r->index.hier_offsets[i], &type, &flags, &payload, &payload_len) != TRL_OK) continue;
+        if (read_block_at(r, r->index.hier_offsets[i], &type, &flags, &payload, &payload_len) != TRL_OK) continue;
         if (type == TRL_BLK_HIERARCHY) {
             trl_hierarchy_decode_streams(payload, payload_len, flags, &tmp, &tmp_count, &tmp_cap);
         }
@@ -641,7 +654,7 @@ static void cursor_build(trl_cursor_t *c) {
     for (size_t i = 0; i < sel_count; ++i) {
         uint8_t type, flags;
         uint8_t *payload; size_t payload_len;
-        if (read_block_at(r->fp, sel[i]->offset, &type, &flags, &payload, &payload_len) != TRL_OK) continue;
+        if (read_block_at(r, sel[i]->offset, &type, &flags, &payload, &payload_len) != TRL_OK) continue;
         if (type != TRL_BLK_TXN_DATA) { free(payload); continue; }
 
         const uint8_t *data = payload;

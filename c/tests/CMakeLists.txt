@@ -52,8 +52,12 @@ target_include_directories(test_codec PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME c_codec COMMAND test_codec)
 
 # Query scan engine (trl/trl_qscan.h, query CLI phase Q4), without Python.
-add_executable(test_qscan test_qscan.c)
-target_link_libraries(test_qscan PRIVATE trl)
+# It reads internal tables, which libtrl does not export: link the objects.
+add_executable(test_qscan test_qscan.c $<TARGET_OBJECTS:trl_obj>)
+target_link_libraries(test_qscan PRIVATE trl_zlib trl_lz4)
+target_compile_definitions(test_qscan PRIVATE TRL_STATIC)
+target_include_directories(test_qscan PRIVATE
+    $<TARGET_PROPERTY:trl_obj,INTERFACE_INCLUDE_DIRECTORIES>)
 target_include_directories(test_qscan PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
 add_test(
     NAME c_qscan
@@ -88,3 +92,9 @@ if(CMAKE_CXX_COMPILER)
     add_test(NAME c_cxx_headers
              COMMAND test_cxx_headers ${CMAKE_CURRENT_BINARY_DIR}/cxx_headers.trl)
 endif()
+
+# trl_reader_open_mem / trl_rdb_open_mem match file-based reading.
+add_executable(test_open_mem test_open_mem.c)
+target_link_libraries(test_open_mem PRIVATE trl)
+target_include_directories(test_open_mem PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME c_open_mem COMMAND test_open_mem ${_fixture_dir})

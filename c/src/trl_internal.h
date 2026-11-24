@@ -246,7 +246,12 @@ struct trl_writer {
 };
 
 struct trl_reader {
+    /* Byte source: a file (fp != NULL) or a borrowed memory buffer
+     * (trl_reader_open_mem). Read through trl_reader_src_* only. */
     FILE *fp;
+    const uint8_t *mem;
+    size_t mem_len;
+    size_t mem_pos;
     trl_status_t status;
     int timescale_exp;
     int64_t timezero;
@@ -258,6 +263,11 @@ struct trl_reader {
     size_t var_sig_cap;
     trl_index_t index;
 };
+
+/* Reader byte source (reader.c): read up to n bytes at the cursor, and
+ * move the cursor to an absolute offset (0 on success). */
+size_t trl_reader_src_read(trl_reader_t *r, void *buf, size_t n);
+int trl_reader_src_seek(trl_reader_t *r, uint64_t off);
 
 /* Storage-SPI handles (opaque in trl/trl_codec.h, defined here for the core
  * and built-in codecs). For Phase 1 the built-in codecs reach the existing
@@ -477,8 +487,12 @@ trl_status_t trl_hierarchy_add_stream_explicit(trl_hierarchy_t *hier, uint32_t s
                                                uint32_t stream_type_id, uint32_t name_id);
 trl_status_t trl_hierarchy_encode_block(const trl_hierarchy_t *hier, trl_compress_t compress, trl_buf_t *out);
 trl_status_t trl_hierarchy_decode_payload(const uint8_t *payload, size_t payload_len, uint8_t flags, uint32_t **var_sig_type_ids, size_t *var_sig_cap);
+/* Calls cb for each node of one hierarchy block (trl_iter_hier). */
+trl_status_t trl_hierarchy_walk_payload(const uint8_t *payload, size_t payload_len, uint8_t flags,
+                                        const trl_string_table_t *strtab, const trl_type_registry_t *typereg,
+                                        trl_hier_cb cb, void *user);
 /* Like trl_hierarchy_decode_payload, but collects H_STREAM entries instead of
- * var signal-type ids (trl_query.h's name lookup, phase 3). *out/*out_count/
+ * var signal-type ids (trl_query.h's name lookup, phase 3). *out, *out_count and
  * *out_cap follow the usual grow-in-place array convention; entries are
  * appended, so the same arrays can be reused across several hierarchy blocks. */
 trl_status_t trl_hierarchy_decode_streams(const uint8_t *payload, size_t payload_len, uint8_t flags,

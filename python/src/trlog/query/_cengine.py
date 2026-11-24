@@ -28,6 +28,7 @@ from array import array
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+from .. import _libpath
 from ._expr import BUILTINS, QueryError, cmp_values, match_pred
 from ._values import MISSING, EnumVal, LogicVal, normalize_field
 
@@ -35,23 +36,13 @@ from ._values import MISSING, EnumVal, LogicVal, normalize_field
 # Library loading
 # ---------------------------------------------------------------------------
 
-_LIB_NAMES = {"linux": "libtrl.so", "darwin": "libtrl.dylib", "win32": "trl.dll"}
 _lib = None
 _lib_error: Optional[str] = None
 _lib_tried = False
 
 
 def _candidates() -> List[Path]:
-    name = _LIB_NAMES.get(sys.platform, "libtrl.so")
-    out = []
-    env = os.environ.get("TRL_LIBRARY_PATH")
-    if env:
-        out.append(Path(env))
-    pkg = Path(__file__).resolve().parents[1]          # trlog/ (a wheel ships it here)
-    out.append(pkg / name)
-    repo = Path(__file__).resolve().parents[4]
-    out += [repo / "build" / "c" / name, repo / "c" / "build" / name, repo / "build" / name]
-    return out
+    return _libpath.candidates("trl")
 
 
 def load():
@@ -65,7 +56,7 @@ def load():
         try:
             if not p.exists():
                 continue
-            lib = ctypes.CDLL(str(p))
+            lib = _libpath.open_cdll(p)
             if not hasattr(lib, "trl_qscan_abi_version"):
                 errors.append(f"{p}: no trl_qscan API")
                 continue

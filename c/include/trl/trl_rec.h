@@ -51,59 +51,59 @@ typedef struct {
 } trl_db_cfg_t;
 
 /* Process-wide registry, so VPI and DPI can share one db by name. */
-trl_db_t     *trl_db_open(const char *name, const trl_db_cfg_t *cfg);
-trl_db_t     *trl_db_find(const char *name);
-trl_status_t  trl_db_close(trl_db_t *);
-trl_writer_t *trl_db_writer(trl_db_t *);
-uint32_t      trl_db_intern(trl_db_t *, const char *s);
-const char   *trl_last_error(void);
+TRL_API trl_db_t     *trl_db_open(const char *name, const trl_db_cfg_t *cfg);
+TRL_API trl_db_t     *trl_db_find(const char *name);
+TRL_API trl_status_t  trl_db_close(trl_db_t *);
+TRL_API trl_writer_t *trl_db_writer(trl_db_t *);
+TRL_API uint32_t      trl_db_intern(trl_db_t *, const char *s);
+TRL_API const char   *trl_last_error(void);
 
 /* Types */
-trl_rtype_t *trl_type_new  (trl_db_t *, const char *name, trl_stream_t *scope);
-trl_rtype_t *trl_type_find (trl_db_t *, const char *name, trl_stream_t *scope);
-int32_t      trl_type_add_field (trl_rtype_t *, const char *name, trl_field_type_t,
+TRL_API trl_rtype_t *trl_type_new  (trl_db_t *, const char *name, trl_stream_t *scope);
+TRL_API trl_rtype_t *trl_type_find (trl_db_t *, const char *name, trl_stream_t *scope);
+TRL_API int32_t      trl_type_add_field (trl_rtype_t *, const char *name, trl_field_type_t,
                                  uint32_t width, trl_renum_t *);
-int32_t      trl_type_add_struct(trl_rtype_t *, const char *name, trl_rtype_t *sub);
-int32_t      trl_type_add_array (trl_rtype_t *, const char *name, trl_field_type_t,
+TRL_API int32_t      trl_type_add_struct(trl_rtype_t *, const char *name, trl_rtype_t *sub);
+TRL_API int32_t      trl_type_add_array (trl_rtype_t *, const char *name, trl_field_type_t,
                                  uint32_t width, uint32_t n);
-int32_t      trl_type_field_get_or_add(trl_rtype_t *, const char *name,
+TRL_API int32_t      trl_type_field_get_or_add(trl_rtype_t *, const char *name,
                                        trl_field_type_t, uint32_t width);
-trl_status_t trl_type_seal(trl_rtype_t *);
-const char  *trl_type_name(const trl_rtype_t *);
-uint32_t     trl_type_num_fields(const trl_rtype_t *);
-int32_t      trl_type_field_index(const trl_rtype_t *, const char *name);
-const char  *trl_type_field_name(const trl_rtype_t *, uint32_t f);
-trl_field_type_t trl_type_field_type(const trl_rtype_t *, uint32_t f);
-uint32_t     trl_type_field_width(const trl_rtype_t *, uint32_t f);
+TRL_API trl_status_t trl_type_seal(trl_rtype_t *);
+TRL_API const char  *trl_type_name(const trl_rtype_t *);
+TRL_API uint32_t     trl_type_num_fields(const trl_rtype_t *);
+TRL_API int32_t      trl_type_field_index(const trl_rtype_t *, const char *name);
+TRL_API const char  *trl_type_field_name(const trl_rtype_t *, uint32_t f);
+TRL_API trl_field_type_t trl_type_field_type(const trl_rtype_t *, uint32_t f);
+TRL_API uint32_t     trl_type_field_width(const trl_rtype_t *, uint32_t f);
 
-trl_renum_t *trl_enum_new(trl_db_t *, const char *name);
-trl_status_t trl_enum_add(trl_renum_t *, const char *label, int64_t value);
+TRL_API trl_renum_t *trl_enum_new(trl_db_t *, const char *name);
+TRL_API trl_status_t trl_enum_add(trl_renum_t *, const char *label, int64_t value);
 
 /* Streams */
-trl_stream_t *trl_stream_new(trl_db_t *, trl_stream_t *parent, const char *name,
+TRL_API trl_stream_t *trl_stream_new(trl_db_t *, trl_stream_t *parent, const char *name,
                              const char *kind, trl_rtype_t *dflt, int *enabled);
-trl_stream_t *trl_stream_find(trl_db_t *, const char *path);
-trl_rtype_t  *trl_stream_adhoc_type(trl_stream_t *);
-uint32_t      trl_stream_inst_id(const trl_stream_t *);
+TRL_API trl_stream_t *trl_stream_find(trl_db_t *, const char *path);
+TRL_API trl_rtype_t  *trl_stream_adhoc_type(trl_stream_t *);
+TRL_API uint32_t      trl_stream_inst_id(const trl_stream_t *);
 
 /* Recording */
-uint64_t   trl_rec_full (trl_stream_t *, trl_rtype_t *, uint64_t start, uint64_t end,
+TRL_API uint64_t   trl_rec_full (trl_stream_t *, trl_rtype_t *, uint64_t start, uint64_t end,
                          uint64_t parent, const uint64_t *vals, uint32_t nvals);
-trl_txn_t *trl_rec_begin(trl_stream_t *, trl_rtype_t *, uint64_t start, uint64_t parent);
-uint64_t   trl_rec_id   (const trl_txn_t *);
-void trl_rec_set_u64  (trl_txn_t *, uint32_t f, uint64_t v);
-void trl_rec_set_i64  (trl_txn_t *, uint32_t f, int64_t v);
-void trl_rec_set_f64  (trl_txn_t *, uint32_t f, double v);
-void trl_rec_set_str  (trl_txn_t *, uint32_t f, const char *s);
-void trl_rec_set_str_id(trl_txn_t *, uint32_t f, uint32_t sid);
-void trl_rec_set_bits (trl_txn_t *, uint32_t f, uint32_t width, const uint8_t *be_bytes);
-void trl_rec_set_logic(trl_txn_t *, uint32_t f, uint32_t width,
+TRL_API trl_txn_t *trl_rec_begin(trl_stream_t *, trl_rtype_t *, uint64_t start, uint64_t parent);
+TRL_API uint64_t   trl_rec_id   (const trl_txn_t *);
+TRL_API void trl_rec_set_u64  (trl_txn_t *, uint32_t f, uint64_t v);
+TRL_API void trl_rec_set_i64  (trl_txn_t *, uint32_t f, int64_t v);
+TRL_API void trl_rec_set_f64  (trl_txn_t *, uint32_t f, double v);
+TRL_API void trl_rec_set_str  (trl_txn_t *, uint32_t f, const char *s);
+TRL_API void trl_rec_set_str_id(trl_txn_t *, uint32_t f, uint32_t sid);
+TRL_API void trl_rec_set_bits (trl_txn_t *, uint32_t f, uint32_t width, const uint8_t *be_bytes);
+TRL_API void trl_rec_set_logic(trl_txn_t *, uint32_t f, uint32_t width,
                        const uint8_t *aval_be, const uint8_t *bval_be);
-void trl_rec_set_bytes(trl_txn_t *, uint32_t f, const uint8_t *p, uint32_t n);
-void trl_rec_link     (trl_txn_t *, uint64_t tgt, uint8_t ltype, uint32_t label_sid);
-void trl_rec_link_ids (trl_db_t *, uint64_t src, uint64_t tgt, uint8_t ltype, uint32_t label_sid);
-void trl_rec_meta     (trl_txn_t *, uint32_t key_sid, uint32_t val_sid);
-void trl_rec_end      (trl_txn_t *, uint64_t end);
+TRL_API void trl_rec_set_bytes(trl_txn_t *, uint32_t f, const uint8_t *p, uint32_t n);
+TRL_API void trl_rec_link     (trl_txn_t *, uint64_t tgt, uint8_t ltype, uint32_t label_sid);
+TRL_API void trl_rec_link_ids (trl_db_t *, uint64_t src, uint64_t tgt, uint8_t ltype, uint32_t label_sid);
+TRL_API void trl_rec_meta     (trl_txn_t *, uint32_t key_sid, uint32_t val_sid);
+TRL_API void trl_rec_end      (trl_txn_t *, uint64_t end);
 
 #ifdef __cplusplus
 }
