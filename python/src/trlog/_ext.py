@@ -15,16 +15,18 @@ from ._types import BlockType, BLOCK_HEADER_SIZE
 
 
 class ExtBlock:
-    """Wraps an application-defined extension block (BLK_EXT).
+    """An application-defined extension block (``BLK_EXT``).
 
-    Parameters
-    ----------
-    ext_type:
-        4-byte identifier, e.g. ``b"COVG"``.
-    ext_version:
-        Version number for the extension (u16).
-    payload:
-        Raw bytes of the extension data.
+    Write one with :meth:`~trlog.TrlWriter.write_ext`; read them with
+    :meth:`~trlog.TrlReader.iter_ext_blocks`.
+
+    Args:
+        ext_type: 4-byte type tag, for example ``b"COVG"``.
+        ext_version: Version of the payload layout (0-65535).
+        payload: Block contents.
+
+    Raises:
+        ValueError: ``ext_type`` is not exactly 4 bytes.
     """
 
     def __init__(
@@ -64,12 +66,13 @@ class ExtBlock:
 
     @classmethod
     def read_block(cls, payload: bytes) -> "ExtBlock":
-        """Parse a BLK_EXT payload (without the 10-byte block header).
+        """Parse a ``BLK_EXT`` block body.
 
-        Parameters
-        ----------
-        payload:
-            Bytes starting at the first byte after the block header.
+        Args:
+            payload: Block bytes after the 10-byte block header.
+
+        Raises:
+            ValueError: ``payload`` is shorter than 6 bytes.
         """
         if len(payload) < 6:
             raise ValueError(f"ExtBlock payload too short: {len(payload)} bytes")

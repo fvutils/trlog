@@ -1,0 +1,2 @@
+exit: 2
+{"error": "usage", "message": "--same-stream needs a t:ID anchor, not a time", "hint": "use -s STREAM with @TIME"}

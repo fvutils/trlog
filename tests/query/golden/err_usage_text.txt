@@ -1,0 +1,4 @@
+exit: 2
+--- stderr
+trlog: error: argument --down: invalid depth (N or all) value: 'x'
+  hint: see `trlog help tree`

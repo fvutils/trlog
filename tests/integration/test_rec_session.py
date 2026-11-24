@@ -91,6 +91,17 @@ def test_adhoc_stream_grows_its_schema():
     assert by_field[1] == 2
 
 
+def test_empty_adhoc_type_has_a_schema():
+    with TrlReader(str(FIXTURE)) as r:
+        begins = [rec for rec in _all_records(r) if isinstance(rec, TxnBegin)
+                  and rec.start_time == 2100]
+        assert len(begins) == 1
+        schema = r.type_registry.get_txn_schema(begins[0].txn_type_id)
+        assert schema is not None
+        assert r.string_table.lookup(schema.name_str_id) == "bare#adhoc"
+        assert schema.fields == []
+
+
 def test_excluded_stream_has_no_records():
     with TrlReader(str(FIXTURE)) as r:
         quiet_inst_id = None

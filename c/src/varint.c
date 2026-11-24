@@ -55,3 +55,42 @@ trl_status_t trl_decode_svarint(const uint8_t *data, size_t len, size_t *offset,
     *value = (int64_t)((raw >> 1) ^ (~(raw & 1) + 1));
     return TRL_OK;
 }
+
+trl_status_t trl_buf_append_uvarint_be(trl_buf_t *buf, const uint8_t *be, size_t n) {
+    if (n <= 8) {
+        uint64_t v = 0;
+        for (size_t i = 0; i < n; ++i) v = (v << 8) | be[i];
+        return trl_buf_append_uvarint(buf, v);
+    }
+    size_t lead = 0;
+    while (lead < n && !be[lead]) ++lead;
+    if (lead == n) return trl_buf_append_u8(buf, 0);
+    size_t nbits = (n - lead - 1) * 8;
+    for (uint8_t top = be[lead]; top; top >>= 1) ++nbits;
+    trl_status_t st = TRL_OK;
+    for (size_t bit = 0; st == TRL_OK && bit < nbits; bit += 7) {
+        uint8_t b = 0;
+        for (size_t k = 0; k < 7 && bit + k < nbits; ++k) {
+            size_t pos = bit + k;
+            if ((be[n - 1 - pos / 8] >> (pos % 8)) & 1u) b |= (uint8_t)(1u << k);
+        }
+        if (bit + 7 < nbits) b |= 0x80u;
+        st = trl_buf_append_u8(buf, b);
+    }
+    return st;
+}
+
+trl_status_t trl_decode_uvarint_be(const uint8_t *data, size_t len, size_t *offset, uint8_t *be, size_t n) {
+    memset(be, 0, n);
+    size_t bit = 0;
+    while (*offset < len) {
+        uint8_t byte = data[(*offset)++];
+        for (size_t k = 0; k < 7; ++k, ++bit) {
+            if (!((byte >> k) & 1u)) continue;
+            if (bit >= n * 8) return TRL_ERR_CORRUPT;
+            be[n - 1 - bit / 8] |= (uint8_t)(1u << (bit % 8));
+        }
+        if (!(byte & 0x80u)) return TRL_OK;
+    }
+    return TRL_ERR_CORRUPT;
+}

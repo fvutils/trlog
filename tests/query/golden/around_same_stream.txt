@@ -1,0 +1,5 @@
+exit: 0
+   -5ns t:30  42.000ns  +3ns    top.env.axi1.mon  axi_wr  addr=0x8000 len=1 resp=SLVERR strb=0xff
+>     0 t:31  47.000ns  +2.5ns  top.env.axi1.mon  axi_rd  addr=0x8004 len=1 resp=DECERR data=0x0 bus=0xzf
+  +15ns t:32  62.000ns  open    top.env.axi1.mon  axi_rd  addr=0xc000
+-- 1 before, 1 after t:31

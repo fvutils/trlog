@@ -1,0 +1,2 @@
+exit: 2
+{"error": "too_many_bins", "message": "--bin 1 gives 69001 bins over 1000..70000 (max 10000)", "bins": 69001, "hint": "use a wider --bin, or leave --bin out to pick one"}

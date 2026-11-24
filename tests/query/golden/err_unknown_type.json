@@ -1,0 +1,2 @@
+exit: 2
+{"error": "unknown_type", "message": "no transaction type matches 'axi_write'", "name": "axi_write", "did_you_mean": ["axi_wr", "axi_rd"], "known_types": ["axi_rd", "axi_wr", "msg", "seq_item"]}

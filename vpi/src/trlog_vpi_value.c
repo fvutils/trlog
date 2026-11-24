@@ -68,14 +68,15 @@ static void pack_4state_bytes(const s_vpi_vecval *vec, int nwords,
 }
 
 /* -------------------------------------------------------------------------
- * Dump-limit check (approximate: uses change count as a size proxy)
+ * Dump-limit check (approximate: uses the file's total change count as a
+ * size proxy)
  * ---------------------------------------------------------------------- */
 
 #define TRLOG_BYTES_PER_CHANGE_ESTIMATE 16ULL
 
 static void check_dump_limit(void) {
     if (!g_trlog.dump_limit || !g_trlog.writer || g_trlog.paused) return;
-    uint64_t estimated = g_trlog.vc_change_count * TRLOG_BYTES_PER_CHANGE_ESTIMATE;
+    uint64_t estimated = g_trlog.total_change_count * TRLOG_BYTES_PER_CHANGE_ESTIMATE;
     if (estimated >= g_trlog.dump_limit) {
         s_vpi_time vt; vt.type = vpiSimTime;
         vpi_get_time(NULL, &vt);
@@ -258,6 +259,7 @@ static void write_signal_value(size_t idx, uint64_t sim_time) {
         }
     }
     g_trlog.vc_change_count++;
+    g_trlog.total_change_count++;
 }
 
 /* -------------------------------------------------------------------------

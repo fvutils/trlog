@@ -1,0 +1,3 @@
+exit: 0
+> t:4  61.000ns  open  top.env.seqr  seq_item  name=hang prio=0  [+1 children]
+-- 1 node; root t:4; 1 descendant not shown (--down 1 for more)

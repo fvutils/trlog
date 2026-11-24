@@ -477,7 +477,8 @@ def _encode_wave(
                 out += encode_uvarint((tidx_delta << 3) | (state << 1) | 1)
             else:
                 # N-bit 4-state
-                is_binary = _is_binary_4state(value, bit_width)
+                value = _as_multistate(value, bit_width, _4STATE_CHARS)
+                is_binary = isinstance(value, int)
                 out += encode_uvarint((tidx_delta << 1) | (1 if is_binary else 0))
                 if is_binary:
                     nbytes = max(1, (bit_width + 7) // 8)
@@ -485,7 +486,8 @@ def _encode_wave(
                 else:
                     out += _pack_4state(value, bit_width)
         elif enc == SignalEncoding.SE_9STATE:
-            is_binary = isinstance(value, int) and value >= 0
+            value = _as_multistate(value, bit_width, _9STATE_CHARS)
+            is_binary = isinstance(value, int)
             out += encode_uvarint((tidx_delta << 1) | (1 if is_binary else 0))
             if is_binary:
                 nbytes = max(1, (bit_width + 7) // 8)
@@ -577,7 +579,7 @@ def _decode_wave(
         for _ in range(group_count):
             header,     offset = decode_uvarint(wave_data, offset)
             tidx_delta         = header >> 1
-            xor_delta,  offset = decode_uvarint(wave_data, offset)
+            xor_delta,  offset = _decode_wide_uvarint(wave_data, offset)
             repeat_m1,  offset = decode_uvarint(wave_data, offset)
             count = repeat_m1 + 1
             for _ in range(count):
@@ -688,36 +690,86 @@ def _decode_wave(
 # 4-state / 9-state helpers
 # ---------------------------------------------------------------------------
 
+def _decode_wide_uvarint(buf, offset: int):
+    """Decode a uvarint of any width (an XOR delta of a signal wider than 64 bits)."""
+    result = 0
+    shift = 0
+    while True:
+        if offset >= len(buf):
+            raise ValueError("Truncated uvarint: buffer ended unexpectedly")
+        byte = buf[offset]
+        offset += 1
+        result |= (byte & 0x7F) << shift
+        if not (byte & 0x80):
+            return result, offset
+        shift += 7
+
+
+_4STATE_CHARS = {'0': 0, '1': 1, 'X': 2, 'Z': 3}
+_9STATE_CHARS = {'0': 0, '1': 1, 'X': 2, 'Z': 3, 'H': 4, 'U': 5, 'W': 6, 'L': 7, '-': 8}
+
+
+def _bit_codes(value, bit_width: int, chars) -> list:
+    """Per-bit wire codes, MSB first, of a 4-state or 9-state value.
+
+    *value* is an ``int``, or a string or list of per-bit states (``0``/``1``
+    as ints or characters, other states as characters in any case). A single
+    state fills every bit; a shorter value is zero-extended on the left and a
+    longer one keeps its low bits.
+    """
+    if isinstance(value, int):
+        return [(value >> (bit_width - 1 - i)) & 1 for i in range(bit_width)]
+    if not isinstance(value, (str, list, tuple)):
+        raise ValueError(f"not a {bit_width}-bit multi-state value: {value!r}")
+    codes = []
+    for b in value:
+        if isinstance(b, int) and b in (0, 1):
+            codes.append(b)
+        elif isinstance(b, str) and b.upper() in chars:
+            codes.append(chars[b.upper()])
+        else:
+            raise ValueError(f"unknown bit state {b!r} in {value!r}")
+    if len(codes) == 1:
+        return codes * bit_width
+    if len(codes) < bit_width:
+        return [0] * (bit_width - len(codes)) + codes
+    return codes[len(codes) - bit_width:]
+
+
+def _as_multistate(value, bit_width: int, chars):
+    """*value* as an ``int`` when every bit is 0 or 1, else *value* unchanged
+    (checked: an unknown state raises ``ValueError``)."""
+    if isinstance(value, int):
+        return value & ((1 << bit_width) - 1)
+    codes = _bit_codes(value, bit_width, chars)
+    if all(c <= 1 for c in codes):
+        v = 0
+        for c in codes:
+            v = (v << 1) | c
+        return v
+    return value
+
+
 def _4state_code(value) -> int:
     """Map a 4-state Python value to wire code 0-3."""
     if isinstance(value, int):
         return value & 1
-    s = str(value).upper()
-    return {'0': 0, '1': 1, 'X': 2, 'Z': 3}.get(s, 0)
+    return _bit_codes(value, 1, _4STATE_CHARS)[0]
 
 
 def _4state_decode(code: int):
     return {0: 0, 1: 1, 2: 'X', 3: 'Z'}.get(code, 0)
 
 
-def _is_binary_4state(value, bit_width: int) -> bool:
-    """True if all bits in *value* are 0 or 1 (no X/Z)."""
-    return isinstance(value, int)
-
-
 def _pack_4state(value, bit_width: int) -> bytes:
     """Pack a 4-state value into 2-bits-per-bit format."""
+    codes = _bit_codes(value, bit_width, _4STATE_CHARS)
     nbytes = max(1, (bit_width * 2 + 7) // 8)
     result = bytearray(nbytes)
-    for i in range(bit_width):
-        bit_pos = bit_width - 1 - i
-        if isinstance(value, int):
-            bit_val = (value >> bit_pos) & 1
-        else:
-            bit_val = 2  # X
+    for i, code in enumerate(codes):
         byte_idx = (i * 2) // 8
         bit_shift = 6 - ((i * 2) % 8)
-        result[byte_idx] |= (bit_val & 3) << bit_shift
+        result[byte_idx] |= (code & 3) << bit_shift
     return bytes(result)
 
 
@@ -747,17 +799,10 @@ def _unpack_4state(data: bytes, bit_width: int):
 
 def _pack_9state(value, bit_width: int) -> bytes:
     """Pack a 9-state value into 4-bits-per-bit (nibble) format."""
+    codes = _bit_codes(value, bit_width, _9STATE_CHARS)
     nbytes = max(1, (bit_width + 1) // 2)
     result = bytearray(nbytes)
-    for i in range(bit_width):
-        if isinstance(value, int):
-            bit_val = (value >> (bit_width - 1 - i)) & 1
-            code = bit_val
-        elif isinstance(value, (list, tuple, str)):
-            v = value[i] if i < len(value) else 0
-            code = _9STATE_CODES.get(v, 0)
-        else:
-            code = 0
+    for i, code in enumerate(codes):
         byte_idx = i // 2
         if i % 2 == 0:
             result[byte_idx] |= (code & 0xF) << 4

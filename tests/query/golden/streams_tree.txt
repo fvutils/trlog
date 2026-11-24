@@ -1,0 +1,10 @@
+exit: 0
+top
+  env
+    axi0
+      mon  8 txns  [axi_wr,axi_rd]
+    axi1
+      mon  3 txns, 1 open  [axi_rd,axi_wr]
+    seqr  4 txns, 1 open  [seq_item]
+  log  4 txns  [msg]
+-- 4 streams

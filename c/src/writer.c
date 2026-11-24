@@ -32,7 +32,7 @@ static trl_status_t trl_writer_write_header(trl_writer_t *w) {
     if (st == TRL_OK) st = trl_buf_append_u8(&payload, TRL_VERSION_MAJOR);
     if (st == TRL_OK) st = trl_buf_append_u8(&payload, TRL_VERSION_MINOR);
     if (st == TRL_OK) st = trl_buf_append_u8(&payload, (uint8_t)(int8_t)w->timescale_exp);
-    if (st == TRL_OK) st = trl_buf_append_le64(&payload, (uint64_t)(int64_t)0);
+    if (st == TRL_OK) st = trl_buf_append_le64(&payload, (uint64_t)w->timezero);
     if (st == TRL_OK) st = trl_buf_append_le32(&payload, 0);
     if (st == TRL_OK) st = trl_buf_append_uvarint(&payload, 0);
     if (st == TRL_OK) st = trl_buf_append_uvarint(&payload, 0);
@@ -81,6 +81,19 @@ trl_writer_t *trl_writer_open(const char *path, int timescale_exp, trl_compress_
     return w;
 }
 
+trl_status_t trl_writer_set_timezero(trl_writer_t *w, int64_t timezero) {
+    /* The header has a fixed size, so rewrite it in place. */
+    long end;
+    if (!w) return TRL_ERR_INVALID;
+    if (w->status != TRL_OK) return w->status;
+    end = ftell(w->fp);
+    if (end < 0 || fseek(w->fp, 0, SEEK_SET) != 0) return w->status = TRL_ERR_IO;
+    w->timezero = timezero;
+    w->status = trl_writer_write_header(w);
+    if (fseek(w->fp, end, SEEK_SET) != 0 && w->status == TRL_OK) w->status = TRL_ERR_IO;
+    return w->status;
+}
+
 uint32_t trl_intern(trl_writer_t *w, const char *s) {
     return trl_string_table_intern(&w->strtab, s);
 }
@@ -116,6 +129,10 @@ uint32_t trl_hier_add_var(trl_writer_t *w, uint32_t name_id, uint32_t sig_type_i
     if (trl_writer_ensure_global_var_cap(w, (size_t)var_id + 1) != TRL_OK) return 0;
     w->global_var_sig_type_ids[var_id] = sig_type_id;
     return var_id;
+}
+
+trl_status_t trl_hier_add_attr(trl_writer_t *w, uint32_t key_str_id, uint32_t value_str_id) {
+    return w->status = trl_hierarchy_add_attr(&w->hierarchy, key_str_id, value_str_id);
 }
 
 uint32_t trl_hier_add_stream(trl_writer_t *w, uint32_t stream_type_id, uint32_t name_id) {
@@ -223,8 +240,11 @@ trl_status_t trl_writer_close(trl_writer_t *w) {
                 : trl_lookup_vc_codec(TRL_CODEC_CORE_VALUECHANGE);
             void *vc_self = w->vc_codec ? w->vc_codec_self : NULL;
             const trl_txn_codec_t *tx = trl_lookup_txn_codec(TRL_CODEC_CORE_RECORD);
-            if (vc) { vc->finalize(vc_self, &store); vc->close(vc_self); }
-            if (tx) { tx->finalize(NULL, &store); tx->close(NULL); }
+            /* finalize/close are optional slots; skip them when NULL. */
+            if (vc && vc->finalize) vc->finalize(vc_self, &store);
+            if (vc && vc->close) vc->close(vc_self);
+            if (tx && tx->finalize) tx->finalize(NULL, &store);
+            if (tx && tx->close) tx->close(NULL);
             w->vc_codec_self = NULL;   /* closed; don't double-close */
         }
         if (st == TRL_OK) st = trl_writer_flush_string_table(w);

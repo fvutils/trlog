@@ -1,0 +1,5 @@
+exit: 0
+stream            decl     txns  open     first      last  types
+top.env.axi0.mon  axi_mon     8     0   2.000ns  36.500ns  axi_wr,axi_rd
+top.env.axi1.mon  axi_mon     3     1  42.000ns  62.000ns  axi_rd,axi_wr
+-- 2 streams

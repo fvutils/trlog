@@ -113,7 +113,7 @@ def compile_vpi_dut(
         "--vpi", "--cc", "--exe", "--bbox-sys", "--bbox-unsup", "--sv",
         "--Mdir", str(obj_dir),
         "-o", str(exe),
-        f"-LDFLAGS={ldflags}",
+        "-LDFLAGS", ldflags,
     ] + [f"+define+{d}" for d in (extra_defines or [])] + [
         str(main_cpp),
         str(sv_file),
@@ -128,8 +128,9 @@ def compile_vpi_dut(
         )
     except subprocess.CalledProcessError as exc:
         pytest.skip(
-            f"Verilator compilation failed (exit {exc.returncode}); "
-            "Verilator >= 5.x may be required for VPI + timing support"
+            f"Verilator compilation failed (exit {exc.returncode}): "
+            "Verilator cannot call user VPI "
+            "system tasks such as $trlog_dumpvars from SV (issue #21)"
         )
     return exe
 

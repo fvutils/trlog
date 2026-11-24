@@ -1,0 +1,10 @@
+exit: 0
+t:30  42.000ns  +3ns    top.env.axi1.mon  axi_wr  addr=0x8000 len=1 resp=SLVERR strb=0xff
+      parent t:3
+      link in cause t:3 (stimulus)
+      link out cause t:101 (resp)
+      meta note="injected error"
+t:31  47.000ns  +2.5ns  top.env.axi1.mon  axi_rd  addr=0x8004 len=1 resp=DECERR data=0x0 bus=0xzf
+      parent t:3
+      link out cause t:102 (resp)
+-- 2 matched; 42.000ns .. 49.500ns

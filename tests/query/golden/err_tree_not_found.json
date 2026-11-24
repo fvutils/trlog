@@ -1,0 +1,2 @@
+exit: 2
+{"error": "not_found", "message": "t:999 is not in this trace", "ref": "t:999", "hint": "refs come from find/show output; check the id"}

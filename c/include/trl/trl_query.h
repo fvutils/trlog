@@ -1,6 +1,10 @@
 #pragma once
 #include "trl/trl.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ----------------------------------------------------------------------- *
  * trl_query.h: L0 reading (sv_api_design.md §7.3, phase 3).
  *
@@ -50,9 +54,9 @@ trl_rstream_t *trl_rdb_stream_find(trl_rdb_t *, const char *path);
 const char    *trl_rstream_path(const trl_rstream_t *);
 uint32_t       trl_rstream_inst_id(const trl_rstream_t *);
 
-/* Resolves a string-table id captured from a cursor's attrs/metas/links
- * (trl_attr_t's string ids live in the schema's own field data, not here;
- * this is for TR_META's key_sid/val_sid and TR_LINK's label_sid). NULL if
+/* Resolves a string-table id from a cursor's metas/links (TR_META's
+ * key_sid/val_sid, TR_LINK's label_sid). STRING attribute values are not
+ * ids: the cursor returns them decoded, in trl_attr_t.value.str. NULL if
  * the id is out of range. */
 const char    *trl_rdb_string_lookup(trl_rdb_t *, uint32_t sid);
 
@@ -101,3 +105,7 @@ trl_cursor_t *trl_cursor_new(trl_rdb_t *, trl_rstream_t *stream, uint64_t t_from
 trl_status_t  trl_cursor_add_stream(trl_cursor_t *, trl_rstream_t *);
 int           trl_cursor_next(trl_cursor_t *, trl_txn_hdr_t *out);   /* 0 = end */
 void          trl_cursor_free(trl_cursor_t *);
+
+#ifdef __cplusplus
+}
+#endif

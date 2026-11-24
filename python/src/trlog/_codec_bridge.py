@@ -1,33 +1,31 @@
-"""ctypes codec bridge — a Python codec driven by the C container (pairing 3).
+"""ctypes bridge: drive a Python value-change codec from the C writer.
 
-This is Phase 3.5 of the pluggable-codecs plan (§0 pairing 3, §4 Phase 3.5): the
-all-C storage container drives a *Python* :class:`~trlog.codec.VcCodec` through
-the plain-C codec ABI (``c/include/trl/trl_codec.h``). It works precisely because
-that ABI is ctypes-friendly by construction — every vtable slot is a function
-pointer and every SPI call is an exported symbol (impl-plan §3, decision 5):
+The C codec ABI (``c/include/trl/trl_codec.h``) uses only plain C functions
+and function-pointer vtables, so ctypes can implement a vtable in Python.
+:func:`register_native` builds a ``trl_vc_codec_t`` whose slots are ctypes
+``CFUNCTYPE`` callbacks into a :class:`~trlog.codec.VcCodec` instance and
+registers it with ``trl_register_vc_codec``. After
+``trl_writer_set_vc_codec(w, codec_id)``, the C writer calls the Python
+codec's ``encode_block``, ``finalize`` and ``close`` through those callbacks.
+Inside a callback, the codec reaches the C container through a
+:class:`Store` whose methods call the SPI functions ``trl_store_intern``,
+``trl_store_vc_change_count`` / ``trl_store_vc_change_at`` and
+``trl_blkout_append``.
 
-* ctypes synthesizes C-callable ``CFUNCTYPE`` thunks for the Python codec's
-  vtable and registers them with the C registry (``trl_register_vc_codec``), so
-  the C writer calls ``encode_block``/``finalize``/``close`` as ordinary function
-  pointers that trampoline into Python;
-* the Python codec calls *back* into the SPI — ``trl_store_vc_change_*`` to read
-  the block's accumulated value-changes, ``trl_blkout_append`` to write its
-  payload, ``trl_store_intern`` for the string table.
+Limitations of the current bridge:
 
-**Minimal slice (this file).** It bridges a single value-change stream of U64
-changes, which is enough to prove the mechanism end-to-end and to lock the SPI
-additions (writer codec-selection + the change-accessor) that Phase 1 deferred.
-The same :class:`VcCodec` runs unchanged in the pure-Python container (pairing 1)
-and here under the C container (pairing 3); only the *source* of the changes
-differs (an in-process block vs. the C accessor), so the codec's payload bytes
-are byte-identical between the two. Container framing (block header, index,
-compression) is whatever the respective container writes — the two containers
-have not yet converged (the Phase-0 xfails), so parity here is at the
-codec-*payload* seam, as the design intends (§0: "wrapped by the C container's
-framing").
+* Write side only. The bridged ``decode_block``, ``open_reader`` and
+  ``input_streams`` slots do nothing and return 0.
+* One stream: per-stream state lives on the :class:`NativeBridge`, not in the
+  C ``self`` pointer.
+* Only ``U64``-kind changes are passed through; other value kinds read as 0.
+* The codec's ``encode_block`` result is appended to the C block buffer as
+  returned, and the C writer writes it as the block. As in the Python writer,
+  the codec returns the complete block: header and payload (see
+  :doc:`/guide/writing-a-codec`).
 
-The bridge is import-safe without ``libtrl.so``: :data:`AVAILABLE` is then False
-and :func:`register_native` raises a clear error.
+The module imports without ``libtrl.so``. :data:`AVAILABLE` is then False and
+:func:`register_native` raises ``RuntimeError``.
 """
 
 from __future__ import annotations
@@ -111,28 +109,36 @@ if AVAILABLE:
 # ---------------------------------------------------------------------------
 
 class _BridgeStore(Store):
-    """A :class:`Store` whose services are fulfilled by the C container through
-    the SPI. Created per-callback around the live ``trl_store*`` the core hands
-    in; do not retain it past the callback (the pointer is only valid then)."""
+    """A :class:`Store` backed by a C ``trl_store`` pointer.
+
+    Created for each callback around the pointer the C writer passes in. The
+    pointer is valid only during that callback, so do not keep the object.
+    """
 
     def __init__(self, cstore: int) -> None:
         super().__init__(writer=None, reader=None)
         self._cstore = cstore
 
     def intern(self, s: str) -> int:
+        """Intern ``s`` in the C writer's string table (``trl_store_intern``)."""
         return int(_LIB.trl_store_intern(self._cstore, s.encode("utf-8")))
 
     # -- change-accessor: the block's accumulated changes, var-major ----------
 
     def vc_start_time(self) -> int:
+        """Start time of the block being encoded."""
         return int(_LIB.trl_store_vc_start_time(self._cstore))
 
     def vc_end_time(self) -> int:
+        """End time of the block being encoded."""
         return int(_LIB.trl_store_vc_end_time(self._cstore))
 
     def vc_changes(self) -> List[tuple]:
-        """Return ``[(var_id, time, value), ...]`` for the current block
-        (U64-kind values, this slice)."""
+        """Return the block's changes as ``[(var_id, time, value), ...]``.
+
+        Changes are grouped by variable. ``value`` is the U64 value; changes
+        of other kinds read as 0.
+        """
         n = int(_LIB.trl_store_vc_change_count(self._cstore))
         out: List[tuple] = []
         var_id = ctypes.c_uint32()
@@ -160,10 +166,17 @@ _KEEPALIVE: List[Any] = []
 
 
 class NativeBridge:
-    """Holds the C vtable + CFUNCTYPE thunks for one bridged :class:`VcCodec`,
-    the per-stream state threaded across the lifecycle, and any exception raised
-    inside a callback (so it can be re-raised on the Python side rather than
-    silently swallowed when it crosses the C boundary)."""
+    """The C vtable and callbacks for one bridged :class:`VcCodec`.
+
+    Holds the codec's per-stream writer state and the first exception raised
+    inside a callback. A callback that raises returns an error code to C; call
+    :meth:`raise_pending` afterwards to re-raise the exception in Python.
+
+    Attributes:
+        codec: The bridged codec instance.
+        pending_exc: First exception raised in a callback, or ``None``.
+        last_payload: Bytes returned by the last ``encode_block`` call.
+    """
 
     def __init__(self, codec: VcCodec) -> None:
         self.codec = codec
@@ -180,8 +193,10 @@ class NativeBridge:
             self.pending_exc = exc
 
     def raise_pending(self) -> None:
-        """Re-raise (and clear) any exception captured inside a callback. Call
-        after a C entry point returns an error so failures surface in Python."""
+        """Re-raise and clear the exception captured in a callback, if any.
+
+        Call this after a C function such as ``trl_vc_flush`` returns an error.
+        """
         exc = self.pending_exc
         if exc is not None:
             self.pending_exc = None
@@ -264,6 +279,11 @@ class NativeBridge:
         return vt
 
     def register(self) -> None:
+        """Register the vtable with ``trl_register_vc_codec``.
+
+        Raises:
+            RuntimeError: If registration fails.
+        """
         rc = _LIB.trl_register_vc_codec(ctypes.byref(self._vtable))
         if rc != 0:
             raise RuntimeError(
@@ -271,10 +291,23 @@ class NativeBridge:
 
 
 def register_native(codec: VcCodec) -> NativeBridge:
-    """Register a Python :class:`VcCodec` with the C container's codec registry
-    so the C writer can drive it (pairing 3). Returns the :class:`NativeBridge`,
-    which the caller keeps for the trace's lifetime (it owns the live callbacks)
-    and uses to surface callback exceptions via :meth:`NativeBridge.raise_pending`."""
+    """Register a Python value-change codec with the C codec registry.
+
+    The codec's ``new_block`` must return an accumulator with
+    ``add_change(var_id, time, value)``; the bridge fills it from the C block
+    before calling ``encode_block``.
+
+    Args:
+        codec: The codec instance, for example from
+            :func:`trlog.codec.lookup_vc_codec`.
+
+    Returns:
+        The :class:`NativeBridge`. Keep it while the C writer can call the
+        codec, and use :meth:`NativeBridge.raise_pending` to surface errors.
+
+    Raises:
+        RuntimeError: If ``libtrl.so`` is not loaded or registration fails.
+    """
     if not AVAILABLE:
         raise RuntimeError(
             "the ctypes codec bridge requires libtrl.so, which is not loaded")

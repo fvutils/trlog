@@ -1,6 +1,10 @@
 #pragma once
 #include "trl/trl.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ----------------------------------------------------------------------- *
  * trl_rec.h: the L0 recording session (sv_api_design.md §7.1, phase 2).
  *
@@ -43,6 +47,7 @@ typedef struct {
     const char *stream_include;     /* comma-separated glob list, NULL = all */
     const char *stream_exclude;     /* comma-separated glob list, NULL = none */
     uint32_t    flags;              /* reserved */
+    int64_t     timezero;           /* header time offset; 0 = none */
 } trl_db_cfg_t;
 
 /* Process-wide registry, so VPI and DPI can share one db by name. */
@@ -99,3 +104,7 @@ void trl_rec_link     (trl_txn_t *, uint64_t tgt, uint8_t ltype, uint32_t label_
 void trl_rec_link_ids (trl_db_t *, uint64_t src, uint64_t tgt, uint8_t ltype, uint32_t label_sid);
 void trl_rec_meta     (trl_txn_t *, uint32_t key_sid, uint32_t val_sid);
 void trl_rec_end      (trl_txn_t *, uint64_t end);
+
+#ifdef __cplusplus
+}
+#endif

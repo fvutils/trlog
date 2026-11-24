@@ -1,0 +1,2 @@
+exit: 2
+{"error": "unknown_enum", "message": "'OKY' is not a value of enum field 'resp'", "name": "OKY", "field": "resp", "pos": 8, "did_you_mean": ["OKAY", "EXOKAY"], "valid_values": ["DECERR", "EXOKAY", "OKAY", "SLVERR"], "expr": "resp == 'OKY'"}

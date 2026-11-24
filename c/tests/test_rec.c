@@ -119,6 +119,12 @@ int main(int argc, char **argv) {
     /* Re-declaring the same ad-hoc field with the same type/width is fine. */
     EXPECT(trl_type_field_get_or_add(dbg_t, "msg", TRL_FT_STRING, 0) == f_msg, "adhoc field_get_or_add idempotent");
 
+    /* An ad-hoc type with no fields yet still gets a schema when a txn opens. */
+    trl_stream_t *bare = trl_stream_new(db, NULL, "bare", NULL, NULL, NULL);
+    trl_txn_t *b1 = trl_rec_begin(bare, trl_stream_adhoc_type(bare), 2100, 0);
+    EXPECT(b1 != NULL, "begin on an empty ad-hoc type");
+    trl_rec_end(b1, 2110);
+
     EXPECT(trl_db_close(db) == TRL_OK, "db_close");
     EXPECT(trl_db_find("phase2") == NULL, "db removed from registry after close");
 

@@ -1,0 +1,7 @@
+exit: 0
+stream            n  missing    min    p50   p90   p99   max    mean  min_ref  max_ref
+top.env.axi0.mon  8        0  2.5ns  2.5ns   3ns   3ns   3ns  2.75ns  t:20     t:10
+top.log           4        0    0ps    0ps   0ps   0ps   0ps     0ps  t:100    t:100
+top.env.seqr      3        1   19ns   19ns  19ns  19ns  19ns    19ns  t:1      t:1
+top.env.axi1.mon  2        1  2.5ns  2.5ns   3ns   3ns   3ns  2.75ns  t:31     t:30
+-- dur: 17 values from 19 matched (2 without a value), 4 groups

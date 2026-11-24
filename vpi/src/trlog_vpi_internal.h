@@ -99,6 +99,8 @@ typedef struct {
     int             vc_active;
     uint64_t        vc_start_time;
     uint64_t        vc_change_count;
+    uint64_t        total_change_count; /* since the file was opened; never
+                                         * reset by a block flush (dump limit) */
 
     /* --- Pending change buffer (scope-grouped mode) --------------------- */
     trlog_vpi_pending_t *pending;

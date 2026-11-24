@@ -1,0 +1,2 @@
+exit: 2
+{"error": "unknown_field", "message": "unknown field 'adr'", "name": "adr", "pos": 0, "did_you_mean": ["addr", "dur"], "known_fields": {"axi_rd": ["addr", "len", "resp", "data", "bus"], "axi_wr": ["addr", "len", "resp", "strb"], "seq_item": ["name", "prio"], "msg": ["text", "sev"]}, "hint": "run `trlog schema TRACE` to list types and fields", "expr": "adr == 1"}

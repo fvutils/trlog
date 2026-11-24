@@ -2,6 +2,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct trl_writer trl_writer_t;
 typedef struct trl_reader trl_reader_t;
 
@@ -117,6 +121,8 @@ typedef struct {
 #define TRL_WATTR_ORIGIN_COMPONENT  "trlog.origin.component"
 
 trl_writer_t *trl_writer_open(const char *path, int timescale_exp, trl_compress_t compress);
+/* Set the header's time offset (default 0). Call any time before close. */
+trl_status_t trl_writer_set_timezero(trl_writer_t *, int64_t timezero);
 uint32_t trl_intern(trl_writer_t *, const char *s);
 uint32_t trl_add_signal_type(trl_writer_t *, uint8_t encoding, uint32_t bit_width, uint8_t radix);
 uint32_t trl_add_txn_schema(trl_writer_t *, uint32_t name_id, uint32_t field_count, const trl_field_def_t *fields);
@@ -126,6 +132,9 @@ trl_status_t trl_hier_begin_scope(trl_writer_t *, uint8_t scope_type, uint32_t n
 trl_status_t trl_hier_end_scope(trl_writer_t *);
 uint32_t trl_hier_add_var(trl_writer_t *, uint32_t name_id, uint32_t sig_type_id, uint8_t dir,
                           uint32_t src_file_str_id, uint32_t src_line);
+/* Attach a key/value string attribute (H_ATTR) to the most recently declared
+ * scope, var or stream of the open hierarchy. Returns TRL_ERR_INVALID if no
+ * node has been declared yet. */
 trl_status_t trl_hier_add_attr(trl_writer_t *, uint32_t key_str_id, uint32_t value_str_id);
 uint32_t trl_hier_add_stream(trl_writer_t *, uint32_t stream_type_id, uint32_t name_id);
 trl_status_t trl_flush_hierarchy(trl_writer_t *);
@@ -151,8 +160,19 @@ trl_status_t trl_writer_close(trl_writer_t *);
 
 trl_reader_t *trl_reader_open(const char *path);
 
+/* Value-change callback. `val`/`len` are the stored value bytes: 2-state
+ * is ceil(width/8) bytes big-endian (at most 8), REAL the 8 bytes of a
+ * double, STRING the bytes without a terminator. */
 typedef void (*trl_vc_cb)(uint32_t var_id, uint64_t time, const uint8_t *val, uint32_t len, void *user);
+/* Transaction callback used by trl_txn_codec_t.decode_block (trl_codec.h).
+ * trl.h has no transaction iterator; read transactions with trl_query.h. */
 typedef void (*trl_txn_cb_t)(uint32_t txn_type, uint32_t stream_inst, uint64_t txn_id, uint64_t start, uint64_t end, void *user);
 
+/* Calls cb for every value change, block by block in file order. Within a
+ * block the changes are grouped by variable, not sorted by time. */
 trl_status_t trl_iter_vc(trl_reader_t *, trl_vc_cb, void *user);
 trl_status_t trl_reader_close(trl_reader_t *);
+
+#ifdef __cplusplus
+}
+#endif

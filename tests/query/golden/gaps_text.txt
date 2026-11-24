@@ -1,0 +1,11 @@
+exit: 0
+stream                from        to    idle  prev     next
+top.env.axi1.mon   1.000ns  42.000ns    41ns  (start)  t:30
+top.env.axi0.mon  36.500ns  70.000ns  33.5ns  t:23     (end)
+top.log           19.000ns  45.500ns  26.5ns  t:100    t:101
+top.log           50.500ns  70.000ns  19.5ns  t:102    t:103
+top.log            1.000ns  19.000ns    18ns  (start)  t:100
+top.env.axi1.mon  49.500ns  62.000ns  12.5ns  t:31     t:32
+top.env.axi0.mon  17.000ns  22.000ns     5ns  t:13     t:20
+top.log           45.500ns  50.500ns     5ns  t:101    t:102
+-- 8 gaps over 4ns in 1.000ns .. 70.000ns

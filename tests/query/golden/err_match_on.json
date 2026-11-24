@@ -1,0 +1,2 @@
+exit: 2
+{"error": "bad_on", "message": "cannot read --on 'a.x = b.y'", "value": "a.x = b.y", "hint": "write a.FIELD == b.FIELD, joined with &&; or bare FIELD names (comma-separated) when both sides use the same name"}

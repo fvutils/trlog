@@ -1,0 +1,28 @@
+exit: 0
+t:30  axi_wr
+  stream   top.env.axi1.mon
+  start    42.000ns  (42000)
+  end      45.000ns  (45000)
+  dur      3ns
+  parent   t:3
+  children -
+  fields
+    addr  0x8000
+    len   1
+    resp  SLVERR
+    strb  0xff
+  meta
+    note  injected error
+  links
+    in  cause        t:3  stimulus
+    out cause        t:101  resp
+
+t:4  seq_item
+  stream   top.env.seqr
+  start    61.000ns  (61000)
+  end      open
+  parent   -
+  children t:32
+  fields
+    name  hang
+    prio  0

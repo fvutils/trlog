@@ -1,0 +1,2 @@
+exit: 2
+{"error": "usage", "message": "unrecognized arguments: --nope", "verb": "find", "hint": "see `trlog help find`"}

@@ -50,3 +50,41 @@ add_executable(test_codec test_codec.c)
 target_link_libraries(test_codec PRIVATE trl)
 target_include_directories(test_codec PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME c_codec COMMAND test_codec)
+
+# Query scan engine (trl/trl_qscan.h, query CLI phase Q4), without Python.
+add_executable(test_qscan test_qscan.c)
+target_link_libraries(test_qscan PRIVATE trl)
+target_include_directories(test_qscan PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+add_test(
+    NAME c_qscan
+    COMMAND test_qscan ${CMAKE_CURRENT_BINARY_DIR}/q4_qscan.trl
+)
+
+# Wide 2-state and N-bit 4-state / 9-state value encoding (code fix task 1).
+add_executable(test_vc_wide test_vc_wide.c)
+target_link_libraries(test_vc_wide PRIVATE trl)
+target_include_directories(test_vc_wide PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(
+    NAME c_vc_wide
+    COMMAND test_vc_wide ${CMAKE_CURRENT_BINARY_DIR}/vc_wide.trl
+)
+
+# C API fixes (code fix task 9): trl_hier_add_attr, trl_rec_full vectors,
+# disabled streams. Read back by tests/integration/test_c_api_fixes.py.
+add_executable(test_capi test_capi.c)
+target_link_libraries(test_capi PRIVATE trl)
+target_include_directories(test_capi PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME c_capi COMMAND test_capi ${CMAKE_CURRENT_BINARY_DIR})
+
+# The public headers compile and link from C++ (extern "C" guards), when a
+# C++ compiler is available.
+include(CheckLanguage)
+check_language(CXX)
+if(CMAKE_CXX_COMPILER)
+    enable_language(CXX)
+    add_executable(test_cxx_headers test_cxx_headers.cpp)
+    target_link_libraries(test_cxx_headers PRIVATE trl)
+    target_include_directories(test_cxx_headers PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME c_cxx_headers
+             COMMAND test_cxx_headers ${CMAKE_CURRENT_BINARY_DIR}/cxx_headers.trl)
+endif()

@@ -1,0 +1,2 @@
+exit: 0
+{"cmd": "stats", "query": {"where": "resp == 'OKAY'", "types": ["axi_rd", "axi_wr"], "value": "addr & 0xff"}, "time_unit": "ps", "value_is_time": false, "summary": {"matched": 8, "n": 8, "missing": 0, "groups": 1, "returned": 1, "truncated": false}, "keys": [], "results": [{"n": 8, "missing": 0, "min": 0, "max": 48, "mean": 24, "p50": 16, "p90": 48, "p99": 48, "min_ref": "t:10", "max_ref": "t:13"}], "next": null, "scan": {"blocks_read": 8, "blocks_skipped": 0, "ms": 0, "index": true, "qindex": false}}

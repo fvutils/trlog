@@ -1,0 +1,21 @@
+exit: 0
+t:1     1.000ns  +19ns   top.env.seqr      seq_item  name=wr_burst prio=1
+t:10    2.000ns  +3ns    top.env.axi0.mon  axi_wr    addr=0x4000 len=1 resp=OKAY strb=0x0f
+t:11    6.000ns  +3ns    top.env.axi0.mon  axi_wr    addr=0x4010 len=2 resp=OKAY strb=0x0f0f
+t:12   10.000ns  +3ns    top.env.axi0.mon  axi_wr    addr=0x4020 len=3 resp=OKAY strb=0x0f0f0f
+t:13   14.000ns  +3ns    top.env.axi0.mon  axi_wr    addr=0x4030 len=4 resp=OKAY strb=0x0f0f0f0f
+t:100  19.000ns  +0ps    top.log           msg       text="write burst done" sev=INFO
+t:2    21.000ns  +19ns   top.env.seqr      seq_item  name=rd_burst prio=2
+t:20   22.000ns  +2.5ns  top.env.axi0.mon  axi_rd    addr=0x4000 len=4 resp=OKAY data=0xa0a00000 bus=0xa0
+t:21   26.000ns  +2.5ns  top.env.axi0.mon  axi_rd    addr=0x4010 len=4 resp=OKAY data=0xa0a00001 bus=0xa1
+t:22   30.000ns  +2.5ns  top.env.axi0.mon  axi_rd    addr=0x4020 len=4 resp=OKAY data=0xa0a00002 bus=0xa2
+t:23   34.000ns  +2.5ns  top.env.axi0.mon  axi_rd    addr=0x4030 len=4 resp=OKAY data=0xa0a00003 bus=0xa3
+t:3    41.000ns  +19ns   top.env.seqr      seq_item  name=err_test prio=5
+t:30   42.000ns  +3ns    top.env.axi1.mon  axi_wr    addr=0x8000 len=1 resp=SLVERR strb=0xff
+t:101  45.500ns  +0ps    top.log           msg       text="slave error at 0x8000" sev=ERROR
+t:31   47.000ns  +2.5ns  top.env.axi1.mon  axi_rd    addr=0x8004 len=1 resp=DECERR data=0x0 bus=0xzf
+t:102  50.500ns  +0ps    top.log           msg       text="decode error" sev=ERROR
+t:4    61.000ns  open    top.env.seqr      seq_item  name=hang prio=0
+t:32   62.000ns  open    top.env.axi1.mon  axi_rd    addr=0xc000
+t:103  70.000ns  +0ps    top.log           msg       text="timeout waiting for rsp" sev=WARN
+-- 19 matched; 1.000ns .. 70.000ns

@@ -27,23 +27,33 @@ class DependencyError(ZstError):
 
 
 class DependencyGraph:
+    """A directed graph of "X depends on Y" edges between integer IDs.
+
+    Used for stream-type dependencies and derived-signal inputs. Nodes are
+    created implicitly by :meth:`add`.
+    """
+
     def __init__(self) -> None:
         self._deps: Dict[int, List[int]] = {}
 
     def add(self, stream_id: int, inputs) -> None:
+        """Set the inputs of ``stream_id``, replacing any earlier ones."""
         self._deps[stream_id] = list(inputs)
 
     @classmethod
     def from_catalog(cls, catalog: Dict[int, List[int]]) -> "DependencyGraph":
+        """Build a graph from a ``{id: [input_ids]}`` dictionary."""
         g = cls()
         for sid, inputs in catalog.items():
             g.add(sid, inputs)
         return g
 
     def inputs(self, stream_id: int) -> List[int]:
+        """Return the direct inputs of ``stream_id`` (empty if none)."""
         return list(self._deps.get(stream_id, []))
 
     def nodes(self) -> List[int]:
+        """Return all IDs that appear in the graph, sorted."""
         nodes = set(self._deps)
         for ins in self._deps.values():
             nodes.update(ins)
@@ -77,14 +87,18 @@ class DependencyGraph:
         return None
 
     def validate_acyclic(self) -> None:
+        """Raise :class:`DependencyError` if the graph has a cycle."""
         cycle = self.find_cycle()
         if cycle:
             arrow = " -> ".join(str(x) for x in cycle)
             raise DependencyError(f"stream dependency cycle: {arrow}")
 
     def topo_order(self) -> List[int]:
-        """Dependencies before dependents. Raises :class:`DependencyError` on a
-        cycle."""
+        """Return all nodes with each node's inputs before the node.
+
+        Raises:
+            DependencyError: The graph has a cycle.
+        """
         self.validate_acyclic()
         order: List[int] = []
         seen = set()
@@ -102,17 +116,24 @@ class DependencyGraph:
         return order
 
     def finalize_order(self) -> List[int]:
-        """Reverse dependency order: dependents first, depended-on streams last
-        (design §4.7)."""
+        """Return the reverse of :meth:`topo_order`: dependents first.
+
+        Raises:
+            DependencyError: The graph has a cycle.
+        """
         return list(reversed(self.topo_order()))
 
 
 class Materializer:
-    """Lazy, memoized materialization of derived streams (design §4.4).
+    """Computes nodes of a :class:`DependencyGraph` on demand, inputs first.
 
-    ``compute(stream_id)`` is invoked at most once per stream and only when the
-    stream (or a dependent) is first requested; the graph guarantees inputs are
-    materialized first. Results are cached for the materializer's lifetime.
+    Usually obtained from :meth:`~trlog.TrlReader.materializer`.
+
+    Args:
+        graph: The dependency graph.
+        compute: Called as ``compute(stream_id, inputs)``, where ``inputs``
+            maps each input ID to its computed result. Called at most once
+            per ID; results are cached for the materializer's lifetime.
     """
 
     def __init__(self, graph: DependencyGraph,
@@ -123,6 +144,12 @@ class Materializer:
         self._in_progress: set = set()
 
     def materialize(self, stream_id: int) -> object:
+        """Return the result for ``stream_id``, computing it and its inputs if
+        they are not cached yet.
+
+        Raises:
+            DependencyError: A cycle was reached.
+        """
         if stream_id in self._cache:
             return self._cache[stream_id]
         if stream_id in self._in_progress:
@@ -138,4 +165,5 @@ class Materializer:
             self._in_progress.discard(stream_id)
 
     def is_materialized(self, stream_id: int) -> bool:
+        """Return whether a result for ``stream_id`` is cached."""
         return stream_id in self._cache

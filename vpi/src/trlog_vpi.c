@@ -200,6 +200,7 @@ static PLI_INT32 trlog_dumpfile_cb(PLI_BYTE8 *user) {
     g_trlog.timescale_exp = ts;
 
     g_trlog.writer = trl_writer_open(filename, ts, g_trlog.compress);
+    g_trlog.total_change_count = 0;
     if (!g_trlog.writer) {
         vpi_printf("$trlog_dumpfile: cannot open '%s' for writing\n", filename);
     }
@@ -331,6 +332,7 @@ static PLI_INT32 trlog_sos_callback(p_cb_data cb) {
     int ts = vpi_get(vpiTimeUnit, NULL);
     g_trlog.timescale_exp = ts;
     g_trlog.writer = trl_writer_open(filepath, ts, g_trlog.compress);
+    g_trlog.total_change_count = 0;
     if (!g_trlog.writer) {
         vpi_printf("trlog: cannot open '%s' (from +trlog_file)\n", filepath);
         return 0;

@@ -45,6 +45,7 @@ _SIG_KEY = 0
 
 
 class ArgType(enum.IntEnum):
+    """Argument and return value types of a :class:`Signature`."""
     NONE = 0
     UINT = 1
     INT  = 2
@@ -60,6 +61,7 @@ _TAG_HASRET  = 0x04   # exit only: a return value follows
 
 @dataclass
 class Signature:
+    """Describes a function: its ID, name, argument types and return type."""
     func_id: int
     name: str
     arg_types: List[ArgType]
@@ -144,11 +146,20 @@ class _Event:
 
 
 class CallReturnWriter:
-    """Domain API: ``enter(func_id, args)`` / ``exit(ret)`` over a trl writer.
+    """Records function calls and returns on a :class:`~trlog.TrlWriter`.
 
-    ``call_stream_id`` and ``sig_stream_id`` are stream-type ids from
-    ``writer.add_stream_type`` (the dependency between them is declared on
-    ``close``). Multiple call streams may share one signature stream.
+    Events are buffered in memory and written by :meth:`close`, which must be
+    called before the ``TrlWriter`` is closed.
+
+    Args:
+        writer: The trace writer.
+        call_stream_id: Stream type ID for this call stream.
+        sig_stream_id: Stream type ID under which the signatures are stored.
+            Several call streams may share one signature stream.
+        signatures: The :class:`Signature` of every function that
+            :meth:`enter` is called with.
+        window: Number of recent distinct calls remembered, so that a repeated
+            identical call is stored as a short back-reference.
     """
 
     def __init__(self, writer, call_stream_id: int, sig_stream_id: int,
@@ -168,6 +179,12 @@ class CallReturnWriter:
     # -- domain API ----------------------------------------------------------
 
     def enter(self, func_id: int, args=(), time: int = 0) -> None:
+        """Record a call to ``func_id`` at ``time``.
+
+        Raises:
+            ValueError: ``func_id`` has no signature, or ``args`` does not
+                have one value per signature argument.
+        """
         sig = self._sigs.get(func_id)
         if sig is None or len(args) != len(sig.arg_types):
             raise ValueError(f"call to {func_id} does not match a signature; "
@@ -177,19 +194,32 @@ class CallReturnWriter:
         self._depth += 1
 
     def exit(self, ret=None, time: int = 0) -> None:
+        """Record the return of the innermost open call at ``time``.
+
+        Args:
+            ret: Return value (an integer), or ``None`` for no value.
+            time: Return time.
+        """
         self._events.append(_Event(enter=False, time=time, ret=ret,
                                    has_ret=ret is not None))
         if self._depth > 0:
             self._depth -= 1
 
     def enter_raw(self, func_id: int, args, start: int, end: int) -> None:
-        """Raw-fallback path (``HAS_RAW_FALLBACK``): spill a call that doesn't fit
-        a signature to an ordinary transaction, readable without this codec."""
+        """Record a call that does not match a signature.
+
+        The call is written as an ordinary transaction, so readers without
+        this module can still see it.
+        """
         self._raw_calls.append((func_id, start, end, list(args)))
 
     # -- finalize ------------------------------------------------------------
 
     def close(self) -> None:
+        """Write the signatures, the stream dependency and the call events.
+
+        Later calls do nothing.
+        """
         if self._closed:
             return
         self._closed = True
@@ -278,6 +308,11 @@ def _window_push(window, frame, cap) -> None:
 
 @dataclass
 class Call:
+    """One call in the tree returned by :meth:`CallReturnReader.call_tree`.
+
+    ``end`` and ``ret`` are ``None`` if the call has no matching return.
+    ``children`` holds the calls made from this call.
+    """
     func_id: int
     name: str
     args: list
@@ -288,6 +323,13 @@ class Call:
 
 
 class CallReturnReader:
+    """Reads call events written by :class:`CallReturnWriter`.
+
+    Args:
+        reader: The trace reader.
+        call_stream_id: The stream type ID passed to ``CallReturnWriter``.
+    """
+
     def __init__(self, reader, call_stream_id: int) -> None:
         self._r = reader
         self._call_stream_id = call_stream_id
@@ -302,6 +344,7 @@ class CallReturnReader:
         self._events = self._load_events()
 
     def signatures(self) -> Dict[int, Signature]:
+        """Return the signatures as ``{func_id: Signature}``."""
         return dict(self._sigs)
 
     def _load_events(self) -> List[dict]:
@@ -353,7 +396,12 @@ class CallReturnReader:
         return cs, ss, window_cap, events
 
     def events(self) -> List[dict]:
-        """Flat enter/exit event list, in order, with depth annotated."""
+        """Return the enter and exit events in order.
+
+        Each event is a dictionary with ``kind`` (``"enter"`` or ``"exit"``),
+        ``time`` and ``depth``; enter events also have ``func_id``, ``name``
+        and ``args``, exit events ``ret``.
+        """
         depth = 0
         out = []
         for ev in self._events:
@@ -368,7 +416,7 @@ class CallReturnReader:
         return out
 
     def call_tree(self) -> List[Call]:
-        """Reconstruct the nested call tree by pairing enter/exit on depth."""
+        """Return the top-level :class:`Call` objects of the call tree."""
         roots: List[Call] = []
         stack: List[Call] = []
         for ev in self._events:

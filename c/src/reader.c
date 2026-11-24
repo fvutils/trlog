@@ -92,6 +92,18 @@ trl_status_t trl_iter_vc(trl_reader_t *r, trl_vc_cb cb, void *user) {
             /* Dispatch decode through the registered core value-change codec
              * (design §4.3); the wrapper calls the same trl_vc_iter_payload. */
             const trl_vc_codec_t *codec = trl_lookup_vc_codec(TRL_CODEC_CORE_VALUECHANGE);
+            if (flags & TRL_FLAG_STRUCT_CODEC) {
+                /* Structural-codec block: the payload starts with the interned
+                 * codec id. A block whose codec is not registered here is
+                 * skipped, never an error (design §4.2). */
+                size_t pos = 0;
+                uint64_t sid = 0;
+                const char *cid = NULL;
+                if (trl_decode_uvarint(payload, payload_len, &pos, &sid) == TRL_OK)
+                    cid = trl_string_table_lookup(&r->strtab, (uint32_t)sid);
+                codec = cid ? trl_lookup_vc_codec(cid) : NULL;
+                if (!codec || !codec->decode_block) { free(payload); continue; }
+            }
             trl_store store = { .writer = NULL, .reader = r };
             int rc = codec->decode_block(NULL, &store, payload, payload_len, flags, cb, user);
             free(payload);

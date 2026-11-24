@@ -180,6 +180,41 @@ trl_status_t trl_vc_block_add_real(trl_vc_block_t *blk, uint32_t var_id, uint64_
     return TRL_OK;
 }
 
+/* Bit *pos* (0 = LSB) of the binary value of *chg*. */
+static unsigned trl_chg_bit(const trl_vc_change_t *chg, uint32_t pos) {
+    if (chg->kind == TRL_VC_VALUE_BYTES) {
+        size_t byte = pos / 8;
+        if (byte >= chg->value.bytes.len) return 0;
+        return (chg->value.bytes.data[chg->value.bytes.len - 1 - byte] >> (pos % 8)) & 1u;
+    }
+    if (chg->kind == TRL_VC_VALUE_U64) return pos < 64 ? (unsigned)((chg->value.u64 >> pos) & 1u) : 0u;
+    return 0;
+}
+
+/* The binary value of *chg* as exactly *nbytes* big-endian bytes: a byte value
+ * keeps its least significant bytes, or is zero-extended; a u64 is zero-extended. */
+static void trl_chg_to_be(const trl_vc_change_t *chg, uint8_t *out, size_t nbytes) {
+    memset(out, 0, nbytes);
+    if (chg->kind == TRL_VC_VALUE_BYTES) {
+        const uint8_t *d = chg->value.bytes.data;
+        size_t len = chg->value.bytes.len;
+        if (len >= nbytes) memcpy(out, d + (len - nbytes), nbytes);
+        else if (len) memcpy(out + (nbytes - len), d, len);
+    } else if (chg->kind == TRL_VC_VALUE_U64) {
+        for (size_t i = 0; i < nbytes && i < 8; ++i) out[nbytes - 1 - i] = (uint8_t)(chg->value.u64 >> (8 * i));
+    }
+}
+
+static trl_status_t trl_append_chg_be(trl_buf_t *buf, const trl_vc_change_t *chg, size_t nbytes) {
+    if (chg->kind == TRL_VC_VALUE_BYTES)
+        return trl_append_exact_bytes(buf, chg->value.bytes.data, chg->value.bytes.len, nbytes);
+    uint64_t v = (chg->kind == TRL_VC_VALUE_U64) ? chg->value.u64 : 0;
+    trl_status_t st = TRL_OK;
+    for (size_t i = nbytes; st == TRL_OK && i-- > 0;)
+        st = trl_buf_append_u8(buf, i < 8 ? (uint8_t)(v >> (8 * i)) : 0);
+    return st;
+}
+
 static trl_status_t trl_vc_encode_init_value(trl_buf_t *payload, const trl_signal_type_entry_t *sig, const trl_vc_change_t *chg) {
     uint8_t enc = sig ? sig->encoding : TRL_SE_2STATE;
     uint32_t bw = sig ? sig->bit_width : 1;
@@ -195,45 +230,40 @@ static trl_status_t trl_vc_encode_init_value(trl_buf_t *payload, const trl_signa
         if (st == TRL_OK && len) st = trl_buf_append(payload, s, len);
         return st;
     }
-    if (enc == TRL_SE_4STATE) {
-        size_t nbytes = bw == 1 ? 1 : (size_t)((bw * 2 + 7) / 8);
+    if (enc == TRL_SE_4STATE || enc == TRL_SE_9STATE) {
+        /* The initial value is always in the packed form: 2 bits (4-state) or
+         * 4 bits (9-state) per bit, MSB first, as Python _pack_4state/_pack_9state. */
+        unsigned bits_per = (enc == TRL_SE_4STATE) ? 2u : 4u;
+        size_t binary_bytes = (size_t)((bw + 7) / 8); if (!binary_bytes) binary_bytes = 1;
+        size_t packed_bytes = (size_t)((bw * bits_per + 7) / 8); if (!packed_bytes) packed_bytes = 1;
         trl_status_t st = trl_buf_append_uvarint(payload, bw);
         if (st != TRL_OK) return st;
-        if (chg->kind == TRL_VC_VALUE_BYTES) return trl_append_exact_bytes(payload, chg->value.bytes.data, chg->value.bytes.len, nbytes);
-        uint8_t v = (uint8_t)(chg->value.u64 & 0x3u);
-        return trl_append_exact_bytes(payload, &v, 1, nbytes);
-    }
-    if (enc == TRL_SE_9STATE) {
-        size_t nbytes = (size_t)((bw + 1) / 2);
-        if (!nbytes) nbytes = 1;
-        trl_status_t st = trl_buf_append_uvarint(payload, bw);
-        if (st != TRL_OK) return st;
-        if (chg->kind == TRL_VC_VALUE_BYTES) return trl_append_exact_bytes(payload, chg->value.bytes.data, chg->value.bytes.len, nbytes);
-        uint8_t v = (uint8_t)(chg->value.u64 & 0xFu);
-        return trl_append_exact_bytes(payload, &v, 1, nbytes);
+        if (enc == TRL_SE_4STATE && bw == 1) {
+            /* 1-bit 4-state values are wire codes 0-3 (0, 1, X, Z). */
+            uint8_t code = (chg->kind == TRL_VC_VALUE_BYTES)
+                ? (chg->value.bytes.len ? chg->value.bytes.data[chg->value.bytes.len - 1] : 0)
+                : (uint8_t)chg->value.u64;
+            return trl_buf_append_u8(payload, (uint8_t)((code & 0x3u) << 6));
+        }
+        if (chg->kind == TRL_VC_VALUE_BYTES && chg->value.bytes.len > binary_bytes)
+            return trl_append_exact_bytes(payload, chg->value.bytes.data, chg->value.bytes.len, packed_bytes);
+        uint8_t *packed = (uint8_t *)calloc(packed_bytes, 1);
+        if (!packed) return TRL_ERR_OOM;
+        for (uint32_t i = 0; i < bw; ++i) {
+            size_t off = (size_t)i * bits_per;
+            packed[off / 8] |= (uint8_t)(trl_chg_bit(chg, bw - 1 - i) << (8 - bits_per - off % 8));
+        }
+        st = trl_buf_append(payload, packed, packed_bytes);
+        free(packed);
+        return st;
     }
     {
         size_t nbytes = (size_t)((bw + 7) / 8);
         if (!nbytes) nbytes = 1;
         trl_status_t st = trl_buf_append_uvarint(payload, bw);
         if (st != TRL_OK) return st;
-        if (chg->kind == TRL_VC_VALUE_BYTES) return trl_append_exact_bytes(payload, chg->value.bytes.data, chg->value.bytes.len, nbytes);
-        uint8_t tmp[8] = {0};
-        for (size_t i = 0; i < nbytes && i < sizeof(tmp); ++i) tmp[nbytes - 1 - i] = (uint8_t)(chg->value.u64 >> (8 * i));
-        return trl_append_exact_bytes(payload, tmp, nbytes, nbytes);
+        return trl_append_chg_be(payload, chg, nbytes);
     }
-}
-
-/* Extract the value of change *chg* as a u64 (big-endian, up to 64 bits). */
-static uint64_t trl_chg_to_u64(const trl_vc_change_t *chg, uint32_t bw) {
-    if (chg->kind == TRL_VC_VALUE_U64) return chg->value.u64;
-    size_t nbytes = (size_t)((bw + 7) / 8); if (!nbytes) nbytes = 1;
-    uint64_t v = 0;
-    const uint8_t *d = chg->value.bytes.data;
-    size_t len = chg->value.bytes.len;
-    for (size_t k = 0; k < len && k < 8; ++k) v = (v << 8) | d[k];
-    (void)nbytes;
-    return v;
 }
 
 /*
@@ -243,7 +273,7 @@ static uint64_t trl_chg_to_u64(const trl_vc_change_t *chg, uint32_t bw) {
  *   rle_group_count : uvarint
  *   for each group:
  *     (tidx_delta << 1) | 1 : uvarint   -- time-index delta from prev+1
- *     xor_delta             : uvarint   -- prev XOR current value
+ *     xor_delta             : uvarint   -- prev XOR current value (any width)
  *     repeat - 1            : uvarint   -- 0=single; N=N+1 repeats, each
  *                                          advancing by tidx_delta
  */
@@ -252,28 +282,37 @@ static trl_status_t trl_vc_encode_wave_xor_rle(trl_buf_t *dst,
         const uint64_t *times, size_t time_count) {
     if (!var->count) return trl_buf_append_uvarint(dst, 0);
 
-    /* Pass 1: compute (tidx_delta, xor_delta) pairs */
+    /* Pass 1: compute (tidx_delta, xor_delta) pairs; xor deltas are kept as
+     * nbytes big-endian bytes each, so values wider than 64 bits are kept whole. */
+    size_t nbytes = (size_t)((bw + 7) / 8);
+    if (!nbytes) nbytes = 1;
     uint64_t *tdeltas = (uint64_t *)malloc(var->count * sizeof(uint64_t));
-    uint64_t *xdeltas = (uint64_t *)malloc(var->count * sizeof(uint64_t));
-    if (!tdeltas || !xdeltas) { free(tdeltas); free(xdeltas); return TRL_ERR_OOM; }
+    uint8_t  *xdeltas = (uint8_t *)malloc(var->count * nbytes);
+    uint8_t  *prev_val = (uint8_t *)calloc(nbytes, 1);
+    uint8_t  *curr = (uint8_t *)malloc(nbytes);
+    if (!tdeltas || !xdeltas || !prev_val || !curr) {
+        free(tdeltas); free(xdeltas); free(prev_val); free(curr);
+        return TRL_ERR_OOM;
+    }
 
     int64_t  prev_tidx = -1;
-    uint64_t prev_val  = 0;
     for (size_t i = 0; i < var->count; ++i) {
         const trl_vc_change_t *chg = &var->items[i];
         size_t tidx = trl_time_index(times, time_count, chg->time);
         tdeltas[i] = (uint64_t)((int64_t)tidx - (prev_tidx + 1));
         prev_tidx  = (int64_t)tidx;
-        uint64_t curr = trl_chg_to_u64(chg, bw);
-        xdeltas[i] = curr ^ prev_val;
-        prev_val   = curr;
+        trl_chg_to_be(chg, curr, nbytes);
+        for (size_t k = 0; k < nbytes; ++k) xdeltas[i * nbytes + k] = curr[k] ^ prev_val[k];
+        memcpy(prev_val, curr, nbytes);
     }
+#define TRL_SAME_PAIR(a, b) (tdeltas[a] == tdeltas[b] && \
+        memcmp(xdeltas + (a) * nbytes, xdeltas + (b) * nbytes, nbytes) == 0)
 
     /* Pass 2: RLE — group consecutive identical (tdelta, xdelta) pairs */
     size_t group_count = 0;
     for (size_t i = 0; i < var->count; ) {
         size_t j = i + 1;
-        while (j < var->count && tdeltas[j] == tdeltas[i] && xdeltas[j] == xdeltas[i]) ++j;
+        while (j < var->count && TRL_SAME_PAIR(j, i)) ++j;
         group_count++;
         i = j;
     }
@@ -282,14 +321,15 @@ static trl_status_t trl_vc_encode_wave_xor_rle(trl_buf_t *dst,
     trl_status_t st = trl_buf_append_uvarint(dst, group_count);
     for (size_t i = 0; st == TRL_OK && i < var->count; ) {
         size_t j = i + 1;
-        while (j < var->count && tdeltas[j] == tdeltas[i] && xdeltas[j] == xdeltas[i]) ++j;
+        while (j < var->count && TRL_SAME_PAIR(j, i)) ++j;
         size_t count = j - i;
         st = trl_buf_append_uvarint(dst, (tdeltas[i] << 1) | 1u);
-        if (st == TRL_OK) st = trl_buf_append_uvarint(dst, xdeltas[i]);
+        if (st == TRL_OK) st = trl_buf_append_uvarint_be(dst, xdeltas + i * nbytes, nbytes);
         if (st == TRL_OK) st = trl_buf_append_uvarint(dst, (uint64_t)(count - 1));
         i = j;
     }
-    free(tdeltas); free(xdeltas);
+#undef TRL_SAME_PAIR
+    free(tdeltas); free(xdeltas); free(prev_val); free(curr);
     return st;
 }
 
@@ -321,10 +361,7 @@ static trl_status_t trl_vc_encode_wave(trl_buf_t *dst, const trl_vc_var_changes_
             st = trl_buf_append_uvarint(dst, (delta << 1) | (uint64_t)(is_binary ? 1 : 0));
             if (st == TRL_OK) {
                 if (chg->kind == TRL_VC_VALUE_BYTES) st = trl_append_exact_bytes(dst, chg->value.bytes.data, chg->value.bytes.len, is_binary ? binary_bytes : packed_bytes);
-                else {
-                    uint8_t v = (uint8_t)(chg->value.u64 & 1u);
-                    st = trl_append_exact_bytes(dst, &v, 1, is_binary ? binary_bytes : packed_bytes);
-                }
+                else st = trl_append_chg_be(dst, chg, binary_bytes);
             }
         } else if (enc == TRL_SE_9STATE) {
             size_t binary_bytes = (size_t)((bw + 7) / 8); if (!binary_bytes) binary_bytes = 1;
@@ -333,10 +370,7 @@ static trl_status_t trl_vc_encode_wave(trl_buf_t *dst, const trl_vc_var_changes_
             st = trl_buf_append_uvarint(dst, (delta << 1) | (uint64_t)(is_binary ? 1 : 0));
             if (st == TRL_OK) {
                 if (chg->kind == TRL_VC_VALUE_BYTES) st = trl_append_exact_bytes(dst, chg->value.bytes.data, chg->value.bytes.len, is_binary ? binary_bytes : packed_bytes);
-                else {
-                    uint8_t v = (uint8_t)(chg->value.u64 & 1u);
-                    st = trl_append_exact_bytes(dst, &v, 1, is_binary ? binary_bytes : packed_bytes);
-                }
+                else st = trl_append_chg_be(dst, chg, binary_bytes);
             }
         } else if (enc == TRL_SE_REAL) {
             union { double d; uint8_t b[8]; } u;
@@ -616,24 +650,41 @@ trl_status_t trl_vc_iter_payload(const uint8_t *payload, size_t payload_len, uin
             uint64_t prev_val  = 0;
             size_t nbytes = (size_t)((bws[vi] + 7) / 8);
             if (!nbytes) nbytes = 1;
-            if (nbytes > 8) nbytes = 8;
-            uint8_t val_buf[8];
+            /* val_buf holds the current value; wide values (> 8 bytes) keep
+             * it there and decode each xor delta into xor_buf. */
+            uint8_t small_val[8], small_xor[8];
+            uint8_t *val_buf = small_val, *xor_buf = small_xor;
+            if (nbytes > 8) {
+                val_buf = (uint8_t *)calloc(nbytes, 1);
+                xor_buf = (uint8_t *)malloc(nbytes);
+                if (!val_buf || !xor_buf) {
+                    free(val_buf); free(xor_buf);
+                    st = TRL_ERR_OOM; free(wave_tmp); wave_tmp = NULL; break;
+                }
+            }
             for (uint64_t gi = 0; st == TRL_OK && gi < group_count; ++gi) {
                 uint64_t hdr = 0, xor_delta = 0, repeat_m1 = 0;
                 st = trl_decode_uvarint(wave, wave_size, &p, &hdr);   if (st != TRL_OK) break;
-                st = trl_decode_uvarint(wave, wave_size, &p, &xor_delta); if (st != TRL_OK) break;
+                if (nbytes > 8) st = trl_decode_uvarint_be(wave, wave_size, &p, xor_buf, nbytes);
+                else            st = trl_decode_uvarint(wave, wave_size, &p, &xor_delta);
+                if (st != TRL_OK) break;
                 st = trl_decode_uvarint(wave, wave_size, &p, &repeat_m1); if (st != TRL_OK) break;
                 uint64_t td = hdr >> 1;
                 for (uint64_t rep = 0; rep <= repeat_m1; ++rep) {
                     uint64_t tidx = (uint64_t)(prev_tidx + 1) + td;
                     if (tidx >= count) { st = TRL_ERR_CORRUPT; break; }
                     prev_tidx = (int64_t)tidx;
-                    prev_val ^= xor_delta;
-                    for (size_t k = 0; k < nbytes; ++k)
-                        val_buf[nbytes - 1 - k] = (uint8_t)(prev_val >> (8 * k));
+                    if (nbytes > 8) {
+                        for (size_t k = 0; k < nbytes; ++k) val_buf[k] ^= xor_buf[k];
+                    } else {
+                        prev_val ^= xor_delta;
+                        for (size_t k = 0; k < nbytes; ++k)
+                            val_buf[nbytes - 1 - k] = (uint8_t)(prev_val >> (8 * k));
+                    }
                     cb(var_ids[vi], times[tidx], val_buf, (uint32_t)nbytes, user);
                 }
             }
+            if (nbytes > 8) { free(val_buf); free(xor_buf); }
             free(wave_tmp); wave_tmp = NULL;
             continue;  /* done with this variable */
         }

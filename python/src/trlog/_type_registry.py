@@ -50,15 +50,20 @@ class TypeRegistry:
     # ------------------------------------------------------------------
 
     def get_signal_type(self, sig_type_id: int) -> Optional[SignalTypeEntry]:
+        """Return the :class:`~trlog.SignalTypeEntry` for an ID, or ``None``."""
         return self._signal_types.get(sig_type_id)
 
     def get_txn_schema(self, txn_type_id: int) -> Optional[TxnSchemaEntry]:
+        """Return the :class:`~trlog.TxnSchemaEntry` for an ID, or ``None``."""
         return self._txn_schemas.get(txn_type_id)
 
     def get_enum_type(self, enum_type_id: int) -> Optional[EnumTypeEntry]:
+        """Return the :class:`~trlog.EnumTypeEntry` for an ID, or ``None``."""
         return self._enum_types.get(enum_type_id)
 
     def get_stream_decl(self, stream_id: int) -> Optional[StreamDeclEntry]:
+        """Return the :class:`~trlog.StreamDeclEntry` for a stream type ID, or
+        ``None``."""
         return self._stream_decls.get(stream_id)
 
     # ------------------------------------------------------------------

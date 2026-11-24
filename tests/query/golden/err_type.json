@@ -1,0 +1,2 @@
+exit: 2
+{"error": "type_error", "message": "'addr' is numeric but is compared with the string '0x4000'", "name": "addr", "pos": 8, "hint": "drop the quotes to compare a number", "expr": "addr == '0x4000'"}

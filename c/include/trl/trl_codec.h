@@ -81,8 +81,10 @@ typedef struct trl_vc_codec {
      * (design §4.7). Returns 0 on success. */
     int (*finalize)(void *self, trl_store *st);
 
-    /* Flush accumulated state into the block-output buffer `out`. The core
-     * compresses+indexes the result. Returns 0 on success. */
+    /* Flush accumulated state into the block-output buffer `out`, as one
+     * complete, framed block (header + payload). The core indexes it and
+     * writes it as-is; it does not compress the output, so a codec that
+     * wants compression applies it itself. Returns 0 on success. */
     int (*encode_block)(void *self, trl_store *st, trl_blkout *out);
 
     /* Reconstruct value-changes from a decompressed payload and emit each. */
@@ -118,11 +120,18 @@ typedef struct trl_txn_codec {
 /* ----------------------------------------------------------------------- *
  * Registry (design §4.2). Codecs are keyed by codec_id string. Core codecs
  * self-register at library init; extensions register before trl_writer_open /
- * after trl_reader_open. Returns 0 on success, non-zero on invalid id / OOM.
- * The registry stores the pointer; the vtable must outlive the trace.
+ * after trl_reader_open. Registering an id twice replaces the earlier entry.
+ * Returns 0 on success; non-zero only if `codec` or its codec_id is NULL or
+ * the registry is full. The id string itself is not validated. The registry
+ * stores the pointer; the vtable must outlive the trace.
  * ----------------------------------------------------------------------- */
 int trl_register_vc_codec(const trl_vc_codec_t *codec);
 int trl_register_txn_codec(const trl_txn_codec_t *codec);
+
+/* Register the core codecs (core.valuechange, core.record). Runs
+ * automatically from a library constructor; call it explicitly when a static
+ * link drops the constructor. Idempotent. */
+void trl_register_core_codecs(void);
 const trl_vc_codec_t  *trl_lookup_vc_codec(const char *codec_id);
 const trl_txn_codec_t *trl_lookup_txn_codec(const char *codec_id);
 

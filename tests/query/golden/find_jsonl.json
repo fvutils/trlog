@@ -1,0 +1,8 @@
+exit: 0
+{"ref": "t:20", "stream": "top.env.axi0.mon", "type": "axi_rd", "start": 22000, "dur": 2500, "fields": {"addr": 16384, "len": 4, "resp": "OKAY", "data": "0xa0a00000", "bus": "0xa0"}}
+{"ref": "t:21", "stream": "top.env.axi0.mon", "type": "axi_rd", "start": 26000, "dur": 2500, "fields": {"addr": 16400, "len": 4, "resp": "OKAY", "data": "0xa0a00001", "bus": "0xa1"}}
+{"ref": "t:22", "stream": "top.env.axi0.mon", "type": "axi_rd", "start": 30000, "dur": 2500, "fields": {"addr": 16416, "len": 4, "resp": "OKAY", "data": "0xa0a00002", "bus": "0xa2"}}
+{"ref": "t:23", "stream": "top.env.axi0.mon", "type": "axi_rd", "start": 34000, "dur": 2500, "fields": {"addr": 16432, "len": 4, "resp": "OKAY", "data": "0xa0a00003", "bus": "0xa3"}}
+{"ref": "t:31", "stream": "top.env.axi1.mon", "type": "axi_rd", "start": 47000, "dur": 2500, "fields": {"addr": 32772, "len": 1, "resp": "DECERR", "data": "0x0", "bus": "0xzf"}}
+{"ref": "t:32", "stream": "top.env.axi1.mon", "type": "axi_rd", "start": 62000, "open": true, "fields": {"addr": 49152}}
+{"cmd": "find", "query": {"types": ["axi_rd"]}, "time_unit": "ps", "summary": {"matched": 6, "returned": 6, "truncated": false, "span": [22000, 62000], "by_stream": {"top.env.axi0.mon": 4, "top.env.axi1.mon": 2}}, "next": null, "scan": {"blocks_read": 8, "blocks_skipped": 0, "ms": 0, "index": true, "qindex": false}}

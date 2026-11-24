@@ -1,18 +1,16 @@
-"""Byte-plane split transform + the core.bytesplit value-change codec.
+"""Byte-plane split transform and the block format of ``core.bytesplit``.
 
-The transform is Parquet's BYTE_STREAM_SPLIT (design §5.4): given ``n`` values of
-``width`` bytes each, store all byte-0s together, then all byte-1s, … so the
-downstream byte compressor sees homogeneous planes (the high-order bytes of
-slowly-varying reals/wide vectors are nearly constant → long runs). It is a pure,
-reversible transform that composes *under* byte compression — the
-transform-then-compress layering this phase validates.
+The transform is the same as Parquet's BYTE_STREAM_SPLIT: given ``n`` values
+of ``width`` bytes each, it stores all byte 0s together, then all byte 1s, and
+so on. A byte compressor applied afterwards sees homogeneous planes; the
+high-order bytes of slowly varying reals and wide counters are nearly
+constant and compress to long runs. The transform is reversible.
 
-``CoreBytesplitCodec`` packages it as a self-contained value-change codec
-(``org.fvutils.trlog.core.bytesplit``). Its block owns its own layout, applies
-the split to fixed-width values, then zlib-compresses. The block is
-**self-identifying**: with ``FLAG_STRUCT_CODEC`` set, the payload begins with the
-interned codec-id string id, so the reader resolves and dispatches — and a reader
-lacking the codec enumerates the block and skips it by length (§2.4/§2.8).
+:class:`BytesplitBlock` is the block accumulator and encoder used by
+:class:`trlog.codec.CoreBytesplitCodec` (``org.fvutils.trlog.core.bytesplit``).
+Its blocks set ``FLAG_STRUCT_CODEC`` and start the payload with the interned
+codec id, so a reader dispatches them by id and a reader without the codec
+skips them by the block length.
 """
 
 from __future__ import annotations
@@ -33,7 +31,18 @@ from ._types import (
 # ---------------------------------------------------------------------------
 
 def byte_split(raw: bytes, width: int) -> bytes:
-    """Scatter ``raw`` (n*width bytes) into ``width`` contiguous byte planes."""
+    """Split ``raw`` into ``width`` byte planes.
+
+    Args:
+        raw: ``n * width`` bytes: ``n`` values of ``width`` bytes each.
+        width: Bytes per value. 0 or 1 returns ``raw`` unchanged.
+
+    Returns:
+        Plane 0 (byte 0 of every value), then plane 1, and so on.
+
+    Raises:
+        ValueError: If ``len(raw)`` is not a multiple of ``width``.
+    """
     if width <= 1:
         return bytes(raw)
     if len(raw) % width != 0:
@@ -50,7 +59,11 @@ def byte_split(raw: bytes, width: int) -> bytes:
 
 
 def byte_unsplit(data: bytes, width: int) -> bytes:
-    """Inverse of :func:`byte_split`."""
+    """Inverse of :func:`byte_split`.
+
+    Raises:
+        ValueError: If ``len(data)`` is not a multiple of ``width``.
+    """
     if width <= 1:
         return bytes(data)
     if len(data) % width != 0:
@@ -102,9 +115,34 @@ def _decode_value(kind: int, width: int, raw: bytes):
 # ---------------------------------------------------------------------------
 
 class BytesplitBlock:
-    """Accumulates fixed-width value-changes and encodes them with byte-plane
-    split + zlib. One ``width`` (plane count) per variable is recorded as the
-    codec param (design §5.4: "params record plane count")."""
+    """Accumulates value changes and encodes one ``core.bytesplit`` block.
+
+    Supports ``SE_REAL`` (8-byte IEEE double) and ``SE_2STATE`` signals
+    (``ceil(bit_width / 8)`` bytes, little-endian unsigned). Other encodings
+    raise ``ValueError`` at encode time.
+
+    Payload layout (after the 10-byte block header; block type
+    ``BLK_VC_DATA``, flags ``FLAG_STRUCT_CODEC``)::
+
+        uvarint codec_id_str      string-table id of the codec id
+        uvarint internal_flags    bit 0: body is zlib-compressed
+        body:
+          uvarint start_time
+          uvarint var_count
+          var_count x:
+            uvarint var_id
+            u8      kind          0 = unsigned int, 1 = real
+            uvarint width         bytes per value (the plane count)
+            uvarint count
+            count x uvarint       time deltas (first from 0, then from
+                                  the previous change)
+            count*width bytes     byte_split() of the little-endian values
+
+    Args:
+        start_time: Block start time.
+        sig_types: Map of var id to ``(SignalEncoding, bit_width)``.
+        compress: zlib-compress the body.
+    """
 
     _FLAG_ZLIB = 0x01
 
@@ -117,14 +155,24 @@ class BytesplitBlock:
         self._changes: Dict[int, List[Tuple[int, object]]] = {}
 
     def add_change(self, var_id: int, time: int, value) -> None:
+        """Append a change. Changes of one variable must be in time order."""
         self._changes.setdefault(var_id, []).append((time, value))
         if time > self.end_time:
             self.end_time = time
 
     def set_initial(self, var_id: int, value) -> None:
+        """Record ``value`` at the block start time, before any other change."""
         self._changes.setdefault(var_id, []).insert(0, (self.start_time, value))
 
     def encode_block(self, codec_id_str: int) -> bytes:
+        """Encode the accumulated changes.
+
+        Args:
+            codec_id_str: String-table id of the codec id string.
+
+        Returns:
+            The complete block, header included.
+        """
         body = bytearray()
         body += encode_uvarint(self.start_time)
         body += encode_uvarint(len(self._changes))
@@ -158,9 +206,15 @@ class BytesplitBlock:
 
     @staticmethod
     def decode_changes(payload: bytes, emit, vc_change_cls):
-        """Parse a bytesplit VC payload (after the 10-byte block header) and push
-        each reconstructed change to ``emit``. ``payload`` still carries the
-        leading codec-id prefix; the caller has already matched it."""
+        """Decode a ``core.bytesplit`` payload and emit its changes.
+
+        Args:
+            payload: The block payload without the 10-byte header. It still
+                starts with the codec-id prefix, which is skipped, not checked.
+            emit: Called once per change.
+            vc_change_cls: Class used to build each change, called as
+                ``vc_change_cls(var_id=..., time=..., value=...)``.
+        """
         offset = 0
         _codec_id_str, offset = decode_uvarint(payload, offset)
         internal_flags, offset = decode_uvarint(payload, offset)

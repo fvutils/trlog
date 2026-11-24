@@ -1,0 +1,2 @@
+exit: 2
+{"error": "not_supported", "message": "'index' is planned for phase Q5 and not available yet", "verb": "index"}

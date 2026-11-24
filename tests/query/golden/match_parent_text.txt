@@ -1,0 +1,8 @@
+exit: 0
+a    b      a.start    lat  id=parent
+t:1  t:10   1.000ns    4ns  1
+t:2  t:20  21.000ns  3.5ns  2
+t:3  t:30  41.000ns    4ns  3
+t:4  t:32  61.000ns   open  4
+-- 4 pairs; unmatched: 0 a, 7 b; lat p50 4ns, p99 4ns, max 4ns
+-- unmatched b: t:11 t:12 t:13 t:21 t:22 t:23 t:31 (--unmatched b to list)

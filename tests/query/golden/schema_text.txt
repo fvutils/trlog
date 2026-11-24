@@ -1,0 +1,13 @@
+exit: 0
+axi_rd  (id 1)  sampled 6
+  field  kind           radix
+  addr   u64            hex    min=0x4000 max=0xc000  top: 0x4000(1) 0x4010(1) 0x4020(1) 0x4030(1) 0x8004(1)  (6 distinct)
+  len    u8             dec    min=1 max=4  top: 4(4) 1(1)  missing=1
+  resp   enum axi_resp  -      {OKAY=0, EXOKAY=1, SLVERR=2, DECERR=3}  top: OKAY(4) DECERR(1)  missing=1
+  data   bitvec         -      min=0x0 max=0xa0a00003  top: 0xa0a00000(1) 0xa0a00001(1) 0xa0a00002(1) 0xa0a00003(1) 0x0(1)  missing=1
+  bus    logicvec       -      min=0xa0 max=0xa3  top: 0xa0(1) 0xa1(1) 0xa2(1) 0xa3(1) 0xzf(1)  missing=1
+
+msg  (id 4)  sampled 4
+  field  kind           radix
+  text   str            -      top: "write burst done"(1) "slave error at 0x8000"(1) "decode error"(1) "timeout waiting for rsp"(1)
+  sev    enum severity  -      {INFO=0, WARN=1, ERROR=2}  top: ERROR(2) INFO(1) WARN(1)

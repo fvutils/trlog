@@ -154,12 +154,17 @@ class MetaBlock:
     def __bool__(self) -> bool:
         return bool(self.attrs)
 
-    def encode_block(self, compress: bool = False) -> bytes:
+    def encode_block(self, compress: bool = False, use_zstd: bool = False) -> bytes:
         payload = encode_typed_attr_list(self.attrs)
         flags = 0
         if compress and payload:
-            payload = zlib.compress(payload)
-            flags |= FLAG_COMPRESSED
+            if use_zstd:
+                import zstandard as zstd  # type: ignore
+                payload = zstd.ZstdCompressor().compress(payload)
+                flags |= FLAG_COMPRESSED | FLAG_COMPRESS_ALG
+            else:
+                payload = zlib.compress(payload)
+                flags |= FLAG_COMPRESSED
         return _make_block(BlockType.BLK_META, flags, payload)
 
     def read_block(self, payload: bytes | memoryview, flags: int = 0) -> None:

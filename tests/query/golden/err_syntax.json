@@ -1,0 +1,2 @@
+exit: 2
+{"error": "syntax", "message": "'=' is not an operator", "pos": 5, "hint": "use '==' to compare", "expr": "addr = 1"}

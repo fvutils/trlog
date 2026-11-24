@@ -1,0 +1,7 @@
+exit: 0
+> t:1      1.000ns  +19ns  top.env.seqr      seq_item  name=wr_burst prio=1
+    t:10   2.000ns  +3ns   top.env.axi0.mon  axi_wr    addr=0x4000 len=1 resp=OKAY strb=0x0f
+    t:11   6.000ns  +3ns   top.env.axi0.mon  axi_wr    addr=0x4010 len=2 resp=OKAY strb=0x0f0f
+    t:12  10.000ns  +3ns   top.env.axi0.mon  axi_wr    addr=0x4020 len=3 resp=OKAY strb=0x0f0f0f
+    t:13  14.000ns  +3ns   top.env.axi0.mon  axi_wr    addr=0x4030 len=4 resp=OKAY strb=0x0f0f0f0f
+-- 5 nodes; root t:1

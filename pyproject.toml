@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trlog"
+version = "0.1.0"
+description = "TRLOG trace format: reader/writer, query API and the trlog CLI"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+zstd = ["zstandard"]
+lz4 = ["lz4"]
+parquet = ["pyarrow"]
+weave = ["sv-weave"]
+
+[project.entry-points."sv_weave.weavers"]
+trlog-record = "trlog.weave:RecordWeaver"
+
+[project.scripts]
+trlog = "trlog.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["python/src"]
+include = ["trlog*"]

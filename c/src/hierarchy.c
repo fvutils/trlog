@@ -21,6 +21,10 @@ static trl_status_t trl_hierarchy_ensure_var_cap(trl_hierarchy_t *hier, size_t n
 void trl_hierarchy_init(trl_hierarchy_t *hier) {
     memset(hier, 0, sizeof(*hier));
     trl_buf_init(&hier->body);
+    /* Var and stream IDs are numbered across all hierarchies of a writer,
+     * so trl_hierarchy_begin does not reset them. */
+    hier->next_var_id = 1;
+    hier->next_stream_id = 1;
 }
 
 void trl_hierarchy_free(trl_hierarchy_t *hier) {
@@ -35,10 +39,7 @@ trl_status_t trl_hierarchy_begin(trl_hierarchy_t *hier, uint32_t hier_id, uint8_
     hier->hier_id = hier_id;
     hier->kind = kind;
     hier->name_id = name_id;
-    hier->next_var_id = 1;
-    hier->next_stream_id = 1;
     hier->scope_depth = 0;
-    memset(hier->var_sig_type_ids, 0, hier->var_sig_cap * sizeof(uint32_t));
     return TRL_OK;
 }
 
@@ -84,6 +85,18 @@ uint32_t trl_hierarchy_add_var(trl_hierarchy_t *hier, uint32_t name_id, uint32_t
     return var_id;
 }
 
+trl_status_t trl_hierarchy_add_attr(trl_hierarchy_t *hier, uint32_t key_str_id, uint32_t value_str_id) {
+    /* H_ATTR attaches to the most recently declared node; an empty body has
+     * none (trl_hierarchy_begin clears it). */
+    if (hier->body.size == 0) {
+        return TRL_ERR_INVALID;
+    }
+    trl_status_t st = trl_buf_append_u8(&hier->body, TRL_H_ATTR);
+    if (st == TRL_OK) st = trl_buf_append_uvarint(&hier->body, key_str_id);
+    if (st == TRL_OK) st = trl_buf_append_uvarint(&hier->body, value_str_id);
+    return st;
+}
+
 uint32_t trl_hierarchy_add_stream(trl_hierarchy_t *hier, uint32_t stream_type_id, uint32_t name_id) {
     uint32_t inst_id = hier->next_stream_id++;
     if (trl_hierarchy_add_stream_explicit(hier, inst_id, stream_type_id, name_id) != TRL_OK) {
@@ -94,7 +107,9 @@ uint32_t trl_hierarchy_add_stream(trl_hierarchy_t *hier, uint32_t stream_type_id
 
 trl_status_t trl_hierarchy_add_stream_explicit(trl_hierarchy_t *hier, uint32_t stream_inst_id,
                                                uint32_t stream_type_id, uint32_t name_id) {
-    trl_status_t st = trl_buf_append_u8(&hier->body, TRL_H_STREAM);
+    trl_status_t st;
+    if (stream_inst_id >= hier->next_stream_id) hier->next_stream_id = stream_inst_id + 1;
+    st = trl_buf_append_u8(&hier->body, TRL_H_STREAM);
     if (st == TRL_OK) st = trl_buf_append_uvarint(&hier->body, stream_inst_id);
     if (st == TRL_OK) st = trl_buf_append_uvarint(&hier->body, stream_type_id);
     if (st == TRL_OK) st = trl_buf_append_uvarint(&hier->body, name_id);
@@ -129,6 +144,58 @@ trl_status_t trl_hierarchy_encode_block(const trl_hierarchy_t *hier, trl_compres
     st = trl_make_block(TRL_BLK_HIERARCHY, 0, inner.data, inner.size, out);
     trl_buf_free(&inner);
     return st;
+}
+
+/* H_SCOPE body, as trl_hierarchy_begin_scope writes it: u8 scope_type, then
+ * name_id, component_id, src_file_str_id and src_line as uvarints. */
+static trl_status_t trl_hierarchy_skip_scope(const uint8_t *data, size_t len, size_t *offset) {
+    uint64_t tmp = 0;
+    trl_status_t st = TRL_OK;
+    if (*offset >= len) return TRL_ERR_CORRUPT;
+    (*offset)++;
+    for (int i = 0; st == TRL_OK && i < 4; ++i) st = trl_decode_uvarint(data, len, offset, &tmp);
+    return st;
+}
+
+/* One typed attr value (python/src/trlog/_metadata.py encode_typed_value). */
+static trl_status_t trl_hierarchy_skip_typed_value(const uint8_t *data, size_t len, size_t *offset, uint8_t attr_type) {
+    uint64_t tmp = 0;
+    trl_status_t st = TRL_OK;
+    uint8_t base = attr_type & (uint8_t)~TRL_AT_ARRAY;
+    if (attr_type & TRL_AT_ARRAY) {
+        uint64_t count = 0;
+        if ((st = trl_decode_uvarint(data, len, offset, &count)) != TRL_OK) return st;
+        for (uint64_t i = 0; st == TRL_OK && i < count; ++i) {
+            st = trl_hierarchy_skip_typed_value(data, len, offset, base);
+        }
+        return st;
+    }
+    switch (base) {
+    case TRL_AT_BOOL:
+        if (*offset >= len) return TRL_ERR_CORRUPT;
+        (*offset)++;
+        return TRL_OK;
+    case TRL_AT_I64:   /* zigzag svarint: same byte layout as a uvarint */
+    case TRL_AT_U64:
+    case TRL_AT_STR:   /* string-table id */
+        return trl_decode_uvarint(data, len, offset, &tmp);
+    case TRL_AT_F64:
+        if (len - *offset < 8) return TRL_ERR_CORRUPT;
+        *offset += 8;
+        return TRL_OK;
+    default:
+        return TRL_ERR_CORRUPT;
+    }
+}
+
+/* H_ATTR2 body: uvarint key_str_id, u8 attr_type, typed value. */
+static trl_status_t trl_hierarchy_skip_attr2(const uint8_t *data, size_t len, size_t *offset) {
+    uint64_t tmp = 0;
+    trl_status_t st = trl_decode_uvarint(data, len, offset, &tmp);
+    if (st != TRL_OK) return st;
+    if (*offset >= len) return TRL_ERR_CORRUPT;
+    uint8_t attr_type = data[(*offset)++];
+    return trl_hierarchy_skip_typed_value(data, len, offset, attr_type);
 }
 
 trl_status_t trl_hierarchy_decode_payload(const uint8_t *payload, size_t payload_len, uint8_t flags, uint32_t **var_sig_type_ids, size_t *var_sig_cap) {
@@ -169,11 +236,7 @@ trl_status_t trl_hierarchy_decode_payload(const uint8_t *payload, size_t payload
         uint8_t tag = data[offset++];
         if (tag == TRL_H_SCOPE) {
             scope_depth++;
-            st = trl_decode_uvarint(data, len, &offset, &tmp);
-            if (st == TRL_OK) st = trl_decode_uvarint(data, len, &offset, &tmp);
-            if (st == TRL_OK) st = trl_decode_uvarint(data, len, &offset, &tmp);
-            if (st == TRL_OK) st = trl_decode_uvarint(data, len, &offset, &tmp);
-            if (st == TRL_OK) st = trl_decode_uvarint(data, len, &offset, &tmp);
+            st = trl_hierarchy_skip_scope(data, len, &offset);
         } else if (tag == TRL_H_UPSCOPE) {
             if (scope_depth <= 0) {
                 st = TRL_ERR_CORRUPT;
@@ -207,6 +270,8 @@ trl_status_t trl_hierarchy_decode_payload(const uint8_t *payload, size_t payload
         } else if (tag == TRL_H_ATTR) {
             if ((st = trl_decode_uvarint(data, len, &offset, &tmp)) != TRL_OK) break;
             if ((st = trl_decode_uvarint(data, len, &offset, &tmp)) != TRL_OK) break;
+        } else if (tag == TRL_H_ATTR2) {
+            st = trl_hierarchy_skip_attr2(data, len, &offset);
         } else {
             break;
         }
@@ -256,12 +321,13 @@ trl_status_t trl_hierarchy_decode_streams(const uint8_t *payload, size_t payload
         uint8_t tag = data[offset++];
         if (tag == TRL_H_SCOPE) {
             scope_depth++;
-            for (int i = 0; st == TRL_OK && i < 4; ++i) st = trl_decode_uvarint(data, len, &offset, &tmp);
+            st = trl_hierarchy_skip_scope(data, len, &offset);
         } else if (tag == TRL_H_UPSCOPE) {
             if (scope_depth <= 0) { st = TRL_ERR_CORRUPT; break; }
             scope_depth--;
         } else if (tag == TRL_H_VAR) {
-            for (int i = 0; st == TRL_OK && i < 2; ++i) st = trl_decode_uvarint(data, len, &offset, &tmp);
+            /* var_id, name_id, sig_type_id, u8 dir, alias_of, src_file, src_line */
+            for (int i = 0; st == TRL_OK && i < 3; ++i) st = trl_decode_uvarint(data, len, &offset, &tmp);
             if (st == TRL_OK) {
                 if (offset >= len) { st = TRL_ERR_CORRUPT; break; }
                 offset++;
@@ -284,6 +350,8 @@ trl_status_t trl_hierarchy_decode_streams(const uint8_t *payload, size_t payload
             };
         } else if (tag == TRL_H_ATTR) {
             for (int i = 0; st == TRL_OK && i < 2; ++i) st = trl_decode_uvarint(data, len, &offset, &tmp);
+        } else if (tag == TRL_H_ATTR2) {
+            st = trl_hierarchy_skip_attr2(data, len, &offset);
         } else {
             break;
         }

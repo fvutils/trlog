@@ -1,0 +1,2 @@
+exit: 0
+{"cmd": "find", "query": {}, "time_unit": "ps", "summary": {"matched": 19, "returned": 0, "truncated": true, "span": [1000, 70000], "by_stream": {"top.env.axi0.mon": 8, "top.env.seqr": 4, "top.log": 4, "top.env.axi1.mon": 3}}, "results": [], "next": "--limit 20", "scan": {"blocks_read": 8, "blocks_skipped": 0, "ms": 0, "index": true, "qindex": false}}

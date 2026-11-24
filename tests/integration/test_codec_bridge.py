@@ -7,6 +7,10 @@ codec run in the pure-Python container, that the lifecycle
 an exception raised inside a Python callback propagates back rather than being
 swallowed at the C boundary.
 
+The trivial codec here returns a bare payload, so its files are not readable;
+``test_codec_write_lifecycle.py`` checks that a codec returning the complete
+block (header and payload) through the bridge writes a file that reads back.
+
 Skipped unless ``libtrl.so`` is loaded (the bridge's whole point is the native
 container).
 """

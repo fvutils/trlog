@@ -230,6 +230,23 @@ trl_status_t trl_type_registry_decode_payload(trl_type_registry_t *reg, const ui
             }
             if (st != TRL_OK) break;
             if (id > reg->txn_count) reg->txn_count = (size_t)id;
+        } else if (tag == TRL_TYPE_TAG_ENUM) {
+            /* Not modelled by the C reader: enum_type_id, name_id, value_count,
+             * then (svarint value, uvarint label_id) per value. */
+            uint64_t tmp = 0, value_count = 0;
+            if ((st = trl_decode_uvarint(data, len, &offset, &tmp)) != TRL_OK) break;
+            if ((st = trl_decode_uvarint(data, len, &offset, &tmp)) != TRL_OK) break;
+            if ((st = trl_decode_uvarint(data, len, &offset, &value_count)) != TRL_OK) break;
+            for (uint64_t vi = 0; st == TRL_OK && vi < value_count; ++vi) {
+                if ((st = trl_decode_uvarint(data, len, &offset, &tmp)) != TRL_OK) break;
+                st = trl_decode_uvarint(data, len, &offset, &tmp);
+            }
+            if (st != TRL_OK) break;
+        } else if (tag == TRL_TYPE_TAG_STREAM_DECL) {
+            /* Not modelled: stream_id, name_id, kind_id, default_txn_type. */
+            uint64_t tmp = 0;
+            for (int k = 0; st == TRL_OK && k < 4; ++k) st = trl_decode_uvarint(data, len, &offset, &tmp);
+            if (st != TRL_OK) break;
         } else if (tag >= TRL_TYPE_TAG_STREAM_V2) {
             /* Forward-compat (impl-plan §2.1, decision 6): every tag >= 0x05 is
              * length-prefixed, so an unrecognised entry — including codec-aware

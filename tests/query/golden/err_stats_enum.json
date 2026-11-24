@@ -1,0 +1,2 @@
+exit: 2
+{"error": "not_numeric", "message": "'resp' is enum, not a number", "name": "resp", "verb": "stats", "hint": "use `trlog count --by FIELD` for the value counts of enum and string fields"}

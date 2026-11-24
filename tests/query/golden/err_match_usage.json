@@ -1,0 +1,2 @@
+exit: 2
+{"error": "usage", "message": "the following arguments are required: --b", "verb": "match", "hint": "see `trlog help match`"}

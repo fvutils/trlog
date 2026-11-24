@@ -1,0 +1,6 @@
+exit: 0
+ 0 t:32   62.000ns  open  top.env.axi1.mon  axi_rd  addr=0xc000
++1 t:103  70.000ns  +0ps  top.log           msg     text="timeout waiting for rsp" sev=WARN
+edges
+  t:32  ->  t:103  related
+-- 2 nodes, 1 edge (- = causes/up, + = effects/down)

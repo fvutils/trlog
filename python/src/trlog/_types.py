@@ -187,6 +187,8 @@ class TxnColumnId(enum.IntEnum):
     COL_LINK_LABEL     = 9
     COL_META_KEY       = 10
     COL_META_VAL       = 11
+    COL_ATTR_DATA      = 12
+    COL_ATTR_PRESENT   = 13
     COL_ATTR_BASE      = 0x80
 
 
@@ -204,6 +206,14 @@ _FIXED_WIDTH_FTS = frozenset({
 
 @dataclass
 class FieldDef:
+    """One field of a transaction schema.
+
+    Attributes:
+        name_str_id: Field name as a string ID.
+        field_type: Value type of the field.
+        display_hint: Radix hint for viewers.
+        enum_type_id: Enum type ID for ``FT_ENUM`` fields.
+    """
     name_str_id:  int
     field_type:   FieldType
     display_hint: Radix = Radix.RX_HEX
@@ -212,6 +222,7 @@ class FieldDef:
 
 @dataclass
 class SignalTypeEntry:
+    """A registered signal type (from ``TypeRegistry.get_signal_type``)."""
     sig_type_id:   int
     encoding:      SignalEncoding
     bit_width:     int = 0
@@ -220,6 +231,10 @@ class SignalTypeEntry:
 
 @dataclass
 class TxnSchemaEntry:
+    """A registered transaction schema (from ``TypeRegistry.get_txn_schema``).
+
+    ``fields`` is the ordered list of :class:`FieldDef`.
+    """
     txn_type_id: int
     name_str_id: int
     fields:      List[FieldDef] = field(default_factory=list)
@@ -227,12 +242,14 @@ class TxnSchemaEntry:
 
 @dataclass
 class EnumValue:
+    """One label of an enum type: an integer and its label string ID."""
     integer_value: int
     label_str_id:  int
 
 
 @dataclass
 class EnumTypeEntry:
+    """A registered enum type (from ``TypeRegistry.get_enum_type``)."""
     enum_type_id: int
     name_str_id:  int
     values:       List[EnumValue] = field(default_factory=list)
@@ -240,6 +257,12 @@ class EnumTypeEntry:
 
 @dataclass
 class StreamDeclEntry:
+    """A registered stream type (from ``TypeRegistry.get_stream_decl``).
+
+    ``name_str_id`` and ``kind_str_id`` are string IDs. ``metadata`` holds
+    the stream type's :class:`TypedAttr` metadata and ``input_streams`` the
+    stream types it depends on. The codec fields identify the stream's codec.
+    """
     stream_id:        int
     name_str_id:      int
     kind_str_id:      int = 0
@@ -272,6 +295,7 @@ class StreamDeclEntry:
 
 @dataclass
 class HierarchyHeader:
+    """Identity of a hierarchy: ID, kind and name string ID."""
     hier_id:     int
     kind:        HierKind
     name_str_id: int
@@ -279,6 +303,12 @@ class HierarchyHeader:
 
 @dataclass
 class HScope:
+    """A scope in a hierarchy.
+
+    ``children`` holds nested scopes, variables and streams in declaration
+    order. ``attrs`` holds string attributes (:class:`HAttr`) and
+    ``typed_attrs`` typed ones (:class:`TypedAttr`).
+    """
     scope_type:       ScopeType
     name_str_id:      int
     component_str_id: int = 0
@@ -291,6 +321,11 @@ class HScope:
 
 @dataclass
 class HVar:
+    """A variable (signal) in a hierarchy.
+
+    Names and file names are string IDs. ``attrs`` holds string attributes
+    (:class:`HAttr`) and ``typed_attrs`` typed ones (:class:`TypedAttr`).
+    """
     var_id:          int
     name_str_id:     int
     sig_type_id:     int
@@ -304,6 +339,12 @@ class HVar:
 
 @dataclass
 class HStream:
+    """A transaction stream instance in a hierarchy.
+
+    ``stream_type_id`` refers to a stream type registered with
+    ``TrlWriter.add_stream_type``. ``attrs`` and ``typed_attrs`` are as for
+    :class:`HVar`.
+    """
     stream_inst_id: int
     stream_type_id: int
     name_str_id:    int
@@ -313,18 +354,20 @@ class HStream:
 
 @dataclass
 class HAttr:
+    """A string attribute on a hierarchy node: key and value string IDs."""
     key_str_id:   int
     value_str_id: int
 
 
 @dataclass
 class TypedAttr:
-    """A transparent-metadata entry (impl-plan §2.3): a key plus a typed value.
+    """A typed key/value metadata entry.
 
-    ``attr_type`` is an :class:`AttrType` value. ``value`` is a Python ``bool``/
-    ``int``/``float``/``str`` for scalars, or a ``list`` of those for arrays. For
-    ``AT_STR`` (and arrays of it) the in-memory ``value`` is the *decoded string*
-    on read; on the wire it is a string-table id.
+    ``attr_type`` is an :class:`AttrType` value. ``value`` is a ``bool``,
+    ``int`` or ``float`` for scalars, or a ``list`` of those for arrays. For
+    ``AT_STR`` (and arrays of it) ``value`` holds string IDs; resolve them
+    with the string table. ``TrlReader.trace_metadata`` and
+    ``TrlReader.stream_metadata`` return already-resolved values.
     """
     key_str_id: int
     attr_type:  int
@@ -333,6 +376,13 @@ class TypedAttr:
 
 @dataclass
 class VcChange:
+    """One value change: variable ID, time and new value.
+
+    The type of ``value`` depends on the signal encoding: ``int`` for 2-state
+    signals and fully known 4-state values, a list of per-bit states for
+    4-state values with X or Z bits, ``float`` for real and ``str`` for
+    string signals.
+    """
     var_id: int
     time:   int
     value:  object  # int, float, str, or bytes depending on encoding
@@ -340,12 +390,15 @@ class VcChange:
 
 @dataclass
 class TxnAttr:
+    """One transaction attribute value: the field's index in the schema and
+    the value."""
     field_idx: int
     value:     object
 
 
 @dataclass
 class TxnFull:
+    """A complete transaction, written with ``write_full``."""
     stream_inst_id: int
     txn_type_id:    int
     txn_id:         int
@@ -357,6 +410,7 @@ class TxnFull:
 
 @dataclass
 class TxnBegin:
+    """The start of a transaction, written with ``write_begin``."""
     stream_inst_id: int
     txn_type_id:    int
     txn_id:         int
@@ -366,18 +420,21 @@ class TxnBegin:
 
 @dataclass
 class TxnAttrRecord:
+    """Attribute values added to an open transaction with ``write_attr``."""
     txn_id:     int
     attrs:      List[TxnAttr] = field(default_factory=list)
 
 
 @dataclass
 class TxnEnd:
+    """The end of a transaction, written with ``write_end``."""
     txn_id:   int
     end_time: int
 
 
 @dataclass
 class TxnLink:
+    """A link between two transactions, written with ``write_link``."""
     link_type:     LinkType
     source_txn_id: int
     target_txn_id: int

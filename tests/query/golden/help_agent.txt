@@ -1,0 +1,48 @@
+exit: 0
+trlog cheat sheet (for LLM agents). Read this, then query; refs chain between calls.
+
+  trlog VERB TRACE [options] [EXPR]      add --json for machine-readable output
+
+START   trlog info T --json         span, time unit, streams, types, counts, hints
+        trlog streams T 'top.env.*' paths, types, txn counts, first/last time
+        trlog schema T axi_wr --sample 200   fields, kinds, enum labels, real values
+FIND    trlog find T -T axi_wr,axi_rd -t 10us..20us "addr in 0x4000..0x40ff"
+        trlog find T open --sort start         never-ended txns
+        trlog find T -T axi_rd --sort -dur --limit 5      slowest first
+        trlog find T "resp == 'SLVERR'" --first --with links,meta,parent
+INSPECT trlog show T t:1234 [t:...]     fields, meta, links, parent, children
+NAV     trlog tree T t:1234             ancestors to the root + children (--down all)
+        trlog links T t:1234 --up all --kind cause    root-cause chain (up = causes)
+        trlog around T t:1234 -n 5      5 txns before/after, all streams (--same-stream)
+        trlog around T @15.2us --window 200ns   overlapping 15.2us +-200ns; size W
+                                        from the span in `info`, or use -n
+        trlog active T @15.2us [EXPR]   txns in progress at that instant
+ANALYZE trlog count T --by stream,resp  groups; a missing value is its own null group
+        trlog stats T dur --by stream   n min p50 p90 p99 max mean + min/max refs
+        trlog hist T start --bin 1us    txns per 1us (throughput); dur, fields too
+        trlog gaps T -s 'top.*.mon' --min 2us     idle stretches, longest first
+        trlog match T --a "type=='req'" --b "type=='rsp'" --on tag   pairs, lat
+                     (= b.end - a.start); --unmatched a|b lists those txns in full
+        trlog export T sqlite -o run.db [-T ..] [EXPR]   SQL tables; views
+                     txn_<type> = txn + stream path + fields (`help export`)
+BATCH   printf '%s\n' 'count --by type' 'find open' | trlog batch T --json
+
+SELECT  -s GLOB (stream path)  -T TYPE[,TYPE]  -t A..B (10us..20us, ..5us, @15us±200ns)
+        -t keeps txns overlapping [A, B], both ends inclusive. Prefer these to EXPR.
+EXPR    fields by name (addr, resp), TYPE.FIELD, id start end dur parent open stream
+        type nlinks nchildren, meta["key"], parent.FIELD.
+        == != < <= > >=  && || !  + - * / % & | ^ ~ << >>  in (a,b)  in A..B
+        stream ~ 'glob'  text =~ /re/  has(f) abs min max bit(x,n) bits(x,hi,lo) len
+        Literals: 42 0x4000 32'h4000 1.5 'str' true; times 10ns 1.5us.
+        Enums compare by label: resp == 'OKAY'. Quote EXPR for the shell.
+MISSING A field the txn lacks (other type, unset, dur of open txn) makes any
+        comparison false, even !=. Test presence with has(f) / !has(f).
+PAGING  default --limit 20. summary.matched is the full count; truncated/next say
+        how to get more (--offset N). --first --last --nth N. --sort -dur,id.
+        --fields a,b and --max-bytes N keep output small; --limit 0 = summary only.
+JSON    {cmd, query, time_unit, summary{matched, returned, truncated, span, ...},
+        stream_prefix?, results[{ref, stream, type, start, dur|open, fields}], next,
+        scan}. Times are integers in time_unit; stream names drop stream_prefix.
+        Big ints/bitvecs are hex strings (x/z for 4-state), enums labels, bytes hex.
+ERRORS  exit 2 with {"error": CODE, "message", "did_you_mean"?, "valid_values"?,
+        "hint"?}; fix the named thing and retry. Exit 1 = ran fine, no matches.

@@ -1,0 +1,10 @@
+exit: 0
+t:1   1.000ns  +19ns  top.env.seqr  seq_item  name=wr_burst prio=1
+     children t:10 t:11 t:12 t:13
+t:2  21.000ns  +19ns  top.env.seqr  seq_item  name=rd_burst prio=2
+     children t:20 t:21 t:22 t:23
+t:3  41.000ns  +19ns  top.env.seqr  seq_item  name=err_test prio=5
+     children t:30 t:31
+t:4  61.000ns  open   top.env.seqr  seq_item  name=hang prio=0
+     children t:32
+-- 4 matched; 1.000ns .. 61.000ns

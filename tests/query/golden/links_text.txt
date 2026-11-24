@@ -1,0 +1,8 @@
+exit: 0
+-1 t:3    41.000ns  +19ns  top.env.seqr      seq_item  name=err_test prio=5
+ 0 t:30   42.000ns  +3ns   top.env.axi1.mon  axi_wr    addr=0x8000 len=1 resp=SLVERR strb=0xff
++1 t:101  45.500ns  +0ps   top.log           msg       text="slave error at 0x8000" sev=ERROR
+edges
+  t:3   ->  t:30   cause  stimulus
+  t:30  ->  t:101  cause  resp
+-- 3 nodes, 2 edges (- = causes/up, + = effects/down)

@@ -1,0 +1,9 @@
+exit: 0
+type      open   count
+axi_rd    false      5
+axi_wr    false      5
+msg       false      4
+seq_item  false      3
+axi_rd    true       1
+seq_item  true       1
+-- 19 matched in 6 groups

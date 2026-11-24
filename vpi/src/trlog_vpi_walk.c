@@ -72,7 +72,9 @@ static void register_vc_callback(vpiHandle sig_handle, int local_idx) {
     s_vpi_value *vp = (s_vpi_value *)calloc(1, sizeof(s_vpi_value));
     if (!tp || !vp) { free(tp); free(vp); vpi_control(vpiFinish, 1); return; }
     tp->type   = vpiSimTime;
-    vp->format = vpiObjTypeVal;
+    /* The callback reads values later (cbAfterDelay); it needs none here.
+     * Icarus warns per change for vpiObjTypeVal on nets. */
+    vp->format = vpiSuppressVal;
     /* Fields: reason, cb_rtn, obj, time, value, index (PLI_INT32), user_data */
     s_cb_data   cb = {
         cbValueChange,

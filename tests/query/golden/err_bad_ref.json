@@ -1,0 +1,2 @@
+exit: 2
+{"error": "bad_ref", "message": "'s:top.log' is not a transaction ref", "ref": "s:top.log", "hint": "show takes t:ID refs; use `trlog streams` for s:, and value/around for v: and @TIME (later phases)"}

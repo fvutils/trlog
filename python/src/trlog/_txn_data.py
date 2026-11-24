@@ -365,6 +365,10 @@ class TxnDataBlock:
         col_meta_val = bytearray()
         # Attribute columns: field_idx -> bytearray
         attr_columns: Dict[int, bytearray] = {}
+        # Per-TR_FULL field-index lists; written as COL_ATTR_PRESENT only if
+        # some record does not set exactly the schema's fields.
+        attr_present: List[List[int]] = []
+        need_present = False
 
         prev_txn_id = 0
         prev_time = self.start_time
@@ -387,6 +391,11 @@ class TxnDataBlock:
                     col_duration += struct.pack('<Q', end - start)
                 col_parent += encode_uvarint(parent)
                 self._encode_attrs_column(txn_type_id, attrs, attr_columns)
+                idxs = [a.field_idx for a in attrs]
+                attr_present.append(idxs)
+                n_fields = len(self._schemas.get(txn_type_id, []))
+                if sorted(idxs) != list(range(n_fields)):
+                    need_present = True
                 if delta:
                     prev_txn_id = txn_id
                     prev_time = end
@@ -488,7 +497,14 @@ class TxnDataBlock:
         if col_meta_val:
             columns.append((C.COL_META_VAL, bytes(col_meta_val)))
         if col_attr_data_bytes:
-            columns.append((12, col_attr_data_bytes))  # COL_ATTR_DATA
+            columns.append((C.COL_ATTR_DATA, col_attr_data_bytes))
+        if need_present:
+            col_present = bytearray()
+            for idxs in attr_present:
+                col_present += encode_uvarint(len(idxs))
+                for idx in idxs:
+                    col_present += encode_uvarint(idx)
+            columns.append((C.COL_ATTR_PRESENT, bytes(col_present)))
         for field_idx in sorted(attr_columns):
             columns.append((C.COL_ATTR_BASE + field_idx, bytes(attr_columns[field_idx])))
 
@@ -585,7 +601,11 @@ class TxnDataBlock:
                     duration = read_u64(C.COL_DURATION)
                     end = start + duration
                 parent = read_uvarint(C.COL_PARENT)
-                attrs = self._decode_attrs_column(txn_type_id, col_data, cur)
+                present = None
+                if C.COL_ATTR_PRESENT in col_data:
+                    present = [read_uvarint(C.COL_ATTR_PRESENT)
+                               for _ in range(read_uvarint(C.COL_ATTR_PRESENT))]
+                attrs = self._decode_attrs_column(txn_type_id, col_data, cur, present)
                 records.append(TxnFull(
                     stream_inst_id=stream_inst_id,
                     txn_type_id=txn_type_id,
@@ -687,15 +707,24 @@ class TxnDataBlock:
         return records
 
     def _decode_attrs_column(self, txn_type_id: int, col_data: Dict[int, bytes],
-                             cur: Dict[int, int]) -> List[TxnAttr]:
-        """Decode attribute values from per-field-index columns."""
+                             cur: Dict[int, int],
+                             present: Optional[List[int]] = None) -> List[TxnAttr]:
+        """Decode attribute values from per-field-index columns.
+
+        *present* lists the record's field indices (from COL_ATTR_PRESENT);
+        without it, every schema field with a column is present.
+        """
         C = TxnColumnId
         schema = self._schemas.get(txn_type_id, [])
+        if present is None:
+            fields = [(i, ft) for i, ft in enumerate(schema)
+                      if C.COL_ATTR_BASE + i in col_data]
+        else:
+            fields = [(i, schema[i] if i < len(schema) else FieldType.FT_U64)
+                      for i in present]
         attrs = []
-        for field_idx, ft in enumerate(schema):
+        for field_idx, ft in fields:
             col_id = C.COL_ATTR_BASE + field_idx
-            if col_id not in col_data:
-                continue
             val, new_off = decode_field(ft, col_data[col_id], cur[col_id])
             cur[col_id] = new_off
             attrs.append(TxnAttr(field_idx=field_idx, value=val))

@@ -1,0 +1,9 @@
+exit: 0
+t:30  42.000ns  +3ns    top.env.axi1.mon  axi_wr  addr=0x8000 len=1 resp=SLVERR strb=0xff
+      link in cause t:3 (stimulus)
+      link out cause t:101 (resp)
+t:31  47.000ns  +2.5ns  top.env.axi1.mon  axi_rd  addr=0x8004 len=1 resp=DECERR data=0x0 bus=0xzf
+      link out cause t:102 (resp)
+t:32  62.000ns  open    top.env.axi1.mon  axi_rd  addr=0xc000
+      link out related t:103
+-- 3 matched; 42.000ns .. 62.000ns

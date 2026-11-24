@@ -306,8 +306,12 @@ Verilator, not just linted.
 
 ### Notes for phase 5 (if any) / general
 
-- The design's `trlog_uvm_pkg` (L3) was never scoped into this
-  implementation plan; `sv_api_design.md` lists it as optional.
+- The design's L3 UVM adapter now exists as `sv/src/trl_uvm_pkg.sv`
+  (`trl_uvm_tr_database`/`trl_uvm_tr_stream`/`trl_uvm_recorder`). It was built
+  with the sv-weave recorder plugin; see `research/sv_gen_impl.md` (phase 1b).
+  Tier-3 `stream::field()` is exercised by its generic path. Fix found on
+  the way: a txn opened on a field-less ad-hoc type recorded schema id 0
+  (`trl_rec_begin` now registers the empty schema).
 - Before using `stream::field()` (tier 3 ad-hoc) or wide-vector fields in
   anything beyond a smoke test, close the trims listed above first,
   especially the tier-1 `record()` Verilator limitation if a benchmark
@@ -324,3 +328,64 @@ Verilator, not just linted.
 - 2026-11-21: phase 2 complete. Nothing has been committed (the user handles commits).
 - 2026-11-21: phase 3 complete, including a phase-2 bug fix (see 3.7). Nothing has been committed (the user handles commits).
 - 2026-11-21: phase 4 complete, including a phase-3 bug fix found by the new Verilator smoke test (see 4.7). Nothing has been committed (the user handles commits).
+
+## Phase 4b: package restructure (2026-11-23)
+
+Reworked the SV package for how SV users actually consume it (`import trl_pkg::*;`):
+
+- **Renamed to the C API's `trl_` convention**: `trlog_pkg`→`trl_pkg`
+  (`sv/src/trl_pkg.sv`), `trlog_macros.svh`→`trl_macros.svh`,
+  `trlog_final`→`trl_final`, macros `TRLOG_IF`/`TRLOG_TIMEUNIT`→`TRL_IF`/`TRL_TIMEUNIT`.
+  Runtime plusargs keep the product name (`+trlog_file`, `+trlog_off`, ...).
+
+- **One class per `.svh`**, each `include`d into `sv/src/trl_pkg.sv`:
+  `trl_db.svh`, `trl_type.svh`, `trl_txn.svh`, `trl_stream.svh`,
+  `trl_rstream.svh`, `trl_schema.svh`, `trl_reader.svh`, `trl_cursor.svh`.
+- **Every package-scope name is prefixed**, so a wildcard import can't
+  collide with user/UVM names: classes `db`→`trl_db`, `type_h`→`trl_type`,
+  `schema_h`→`trl_schema`, `txn`→`trl_txn`, `stream`→`trl_stream`,
+  `rstream`→`trl_rstream`, `reader`→`trl_reader`, `cursor`→`trl_cursor`;
+  enums `kind_e`→`trl_field_type_e` (literals `TRL_FT_*`, mirroring trl.h's
+  `trl_field_type_t`, so `K_BITS`→`TRL_FT_BITVEC`, `K_LOGIC`→`TRL_FT_LOGICVEC`),
+  `link_e`→`trl_link_e` (`TRL_LINK_*`); functions `enabled`/`now`/`shutdown`
+  →`trl_enabled`/`trl_now`/`trl_shutdown`. The package globals
+  `g_enabled`/`g_inited` became `local static` members of `trl_db`
+  (with `trl_db::enabled()`), so they no longer leak into the importer's scope.
+  Class method names are unchanged (they're class-scoped).
+- **No separate DPI package.** `trlog_dpi_pkg.sv` became `trl_sv_dpi.svh`
+  (git mv), included directly into `trl_pkg` — the package is useless
+  without DPI, so an extra package bought nothing. The `trl_sv_*` import
+  names were already prefixed.
+- `sv/tests/top_smoke.sv` now uses unqualified names after
+  `import trl_pkg::*;` to exercise the wildcard import; the pytest wrapper
+  compiles `trl_pkg.sv` + `trl_final.sv` + the test only.
+- `sv_api_design.md` §6/§8 updated to the new names.
+
+Verification: `sv/tests/test_sv_smoke.py` 1 passed (Verilator compile + DPI
+round-trip). No C changes.
+
+## Phase 4c: SV documentation (2026-11-23)
+
+- Every public class, function, property, enum, macro and the `trl_final`
+  module in `sv/src` has a doc comment in sphinx-systemverilog's `native`
+  dialect (RST). Maintainer notes that used to sit at the top of
+  `trl_pkg.sv` moved inside the package so they don't become its doc.
+- `docs/conf.py` loads `sphinx_systemverilog` with `sv_build_units` =
+  `trl_pkg.sv` + `trl_final.sv` (not `sv_source_dirs`: the `.svh` files
+  are only valid inside the package). New pages: `docs/guide/systemverilog.md`
+  (user guide), `docs/api/sv.rst` (class reference), `docs/api/sv_dpi.rst`
+  (raw DPI imports).
+- Build: `packages/python/bin/python -m sphinx -b html docs docs/_build/html`.
+  All 153 public SV objects are documented; the 7 left out are `local`
+  members and the include guard. The only warnings left are the 5 that
+  existed before (stale Python `ZstWriter`/`ZstReader` autodoc names,
+  missing `codec-registry`/`writing-a-codec` pages, no `_static` dir).
+- Comment-writing rules forced by the `native` parser (sphinx-systemverilog
+  0.6.2): a `:param:`/`:returns:` field must fit on one comment line (wrapped
+  lines fall out of the field), and no comment line may *start* with a role
+  such as `:sv:func:` (even indented, it is taken as a new field). Bare
+  member refs (`:sv:func:\`get\``) are ambiguous across classes; write
+  `:sv:func:\`get <trl_db::get>\``.
+- Known gap found while documenting: `trl_stream::open_txn(null)` on a stream
+  with no default type dereferences a null `dflt_type` (design §8.3's ad-hoc
+  example does exactly this). The guide passes `adhoc_type()` explicitly.

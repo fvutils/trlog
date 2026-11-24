@@ -178,6 +178,13 @@ trl_db_t *trl_db_open(const char *name, const trl_db_cfg_t *cfg) {
         free(db);
         return NULL;
     }
+    if (cfg->timezero != 0 && trl_writer_set_timezero(db->w, cfg->timezero) != TRL_OK) {
+        set_error("trl_db_open: could not write timezero to '%s'", cfg->path);
+        trl_writer_close(db->w);
+        free(db->name);
+        free(db);
+        return NULL;
+    }
     db->block_bytes = cfg->block_bytes ? cfg->block_bytes : TRL_DEFAULT_BLOCK_BYTES;
     db->include = cfg->stream_include ? trl_strdup_len(cfg->stream_include, strlen(cfg->stream_include)) : NULL;
     db->exclude = cfg->stream_exclude ? trl_strdup_len(cfg->stream_exclude, strlen(cfg->stream_exclude)) : NULL;
@@ -655,13 +662,30 @@ static trl_attr_t make_fixed_attr(uint32_t field_idx, trl_field_type_t ft, uint6
     return a;
 }
 
-static int fixed_width_attr_kind(trl_field_type_t ft) {
-    switch (ft) {
-        case TRL_FT_BITVEC: case TRL_FT_BYTES: case TRL_FT_LOGICVEC:
-            return 0;
-        default:
-            return 1;
+/* Fill a BITVEC/LOGICVEC attr of width <= 64 from the raw value: the value's
+ * low `width` bits, big-endian, into scratch (16 bytes). A LOGICVEC gets
+ * bval = 0 (no X/Z). Returns 0 when the field cannot be carried in 64 bits
+ * (BYTES, or a vector wider than 64). */
+static int make_vec_attr(trl_attr_t *a, uint32_t field_idx, const trl_field_slot_t *fd, uint64_t raw,
+                         uint8_t *scratch) {
+    uint32_t width = fd->width;
+    if (fd->type == TRL_FT_BYTES || width == 0 || width > 64) return 0;
+    uint32_t nbytes = (width + 7) / 8;
+    if (width < 64) raw &= (((uint64_t)1 << width) - 1);
+    for (uint32_t b = 0; b < nbytes; ++b) {
+        scratch[nbytes - 1 - b] = (uint8_t)(raw >> (8 * b));
     }
+    memset(a, 0, sizeof(*a));
+    a->field_idx = field_idx;
+    a->field_type = fd->type;
+    a->value.vec.data = scratch;
+    a->value.vec.len = nbytes;
+    if (fd->type == TRL_FT_LOGICVEC) {
+        memset(scratch + nbytes, 0, nbytes);
+        a->value.vec.len = 2 * nbytes;
+    }
+    a->value.vec.width = width;
+    return 1;
 }
 
 uint64_t trl_rec_full(trl_stream_t *s, trl_rtype_t *t, uint64_t start, uint64_t end,
@@ -670,24 +694,43 @@ uint64_t trl_rec_full(trl_stream_t *s, trl_rtype_t *t, uint64_t start, uint64_t 
         set_error("trl_rec_full: type '%s' is not sealed", t->name);
         return 0;
     }
+    if (!s->enabled) return 0;
     ensure_stream_active(s, start);
     uint32_t n = nvals < t->count ? nvals : (uint32_t)t->count;
     trl_attr_t *attrs = n ? (trl_attr_t *)malloc(n * sizeof(*attrs)) : NULL;
+    uint8_t *scratch = n ? (uint8_t *)malloc((size_t)n * 16) : NULL;
+    if (n && (!attrs || !scratch)) {
+        free(attrs);
+        free(scratch);
+        set_error("trl_rec_full: out of memory");
+        return 0;
+    }
     uint32_t used = 0;
     for (uint32_t i = 0; i < n; ++i) {
-        if (fixed_width_attr_kind(t->fields[i].type)) {
-            attrs[used++] = make_fixed_attr(i, t->fields[i].type, vals[i], s->db);
+        trl_field_type_t ft = t->fields[i].type;
+        if (ft == TRL_FT_BITVEC || ft == TRL_FT_LOGICVEC || ft == TRL_FT_BYTES) {
+            if (make_vec_attr(&attrs[used], i, &t->fields[i], vals[i], scratch + 16 * i)) {
+                used++;
+            } else {
+                set_error("trl_rec_full: field '%s' does not fit in 64 bits; "
+                          "set it with trl_rec_begin/trl_rec_set_*", t->fields[i].name);
+            }
+        } else {
+            attrs[used++] = make_fixed_attr(i, ft, vals[i], s->db);
         }
     }
     uint64_t txn_id = s->db->next_txn_id++;
     trl_txn_block_add_full(&s->blk, s->stream_inst_id, t->schema_id, txn_id, start, end, parent, used, attrs);
     free(attrs);
+    free(scratch);
     auto_flush_stream(s);
     return txn_id;
 }
 
 trl_txn_t *trl_rec_begin(trl_stream_t *s, trl_rtype_t *t, uint64_t start, uint64_t parent) {
     trl_txn_t *txn;
+    /* An ad-hoc type has no schema until its first field; register the empty one. */
+    if (s->enabled && t && t->adhoc && !t->sealed && register_schema(t) != TRL_OK) return NULL;
     if (s->db->txn_free) {
         txn = s->db->txn_free;
         s->db->txn_free = txn->next_free;
@@ -698,9 +741,15 @@ trl_txn_t *trl_rec_begin(trl_stream_t *s, trl_rtype_t *t, uint64_t start, uint64
     txn->db = s->db;
     txn->stream = s;
     txn->rtype = t;
+    txn->start = start;
+    if (!s->enabled) {
+        /* Disabled stream: hand out a handle so callers need no check, but
+         * record nothing. Id 0 marks the handle for set/link/meta/end. */
+        txn->txn_id = 0;
+        return txn;
+    }
     ensure_stream_active(s, start);
     txn->txn_id = s->db->next_txn_id++;
-    txn->start = start;
     trl_txn_block_add_begin(&s->blk, s->stream_inst_id, t ? t->schema_id : 0, txn->txn_id, start, parent);
     auto_flush_stream(s);
     return txn;
@@ -713,6 +762,7 @@ static void set_attr(trl_txn_t *txn, uint32_t f, trl_attr_t attr) {
         set_error("trl_rec_set_*: field %u is out of range", f);
         return;
     }
+    if (!txn->txn_id) return;
     attr.field_idx = f;
     attr.field_type = txn->rtype->fields[f].type;
     ensure_stream_active(txn->stream, txn->start);
@@ -773,6 +823,7 @@ void trl_rec_set_bytes(trl_txn_t *txn, uint32_t f, const uint8_t *p, uint32_t n)
 }
 
 void trl_rec_link(trl_txn_t *txn, uint64_t tgt, uint8_t ltype, uint32_t label_sid) {
+    if (!txn->txn_id) return;
     ensure_stream_active(txn->stream, txn->start);
     trl_txn_block_add_link(&txn->stream->blk, ltype, txn->txn_id, tgt, label_sid);
     auto_flush_stream(txn->stream);
@@ -785,15 +836,18 @@ void trl_rec_link_ids(trl_db_t *db, uint64_t src, uint64_t tgt, uint8_t ltype, u
 }
 
 void trl_rec_meta(trl_txn_t *txn, uint32_t key_sid, uint32_t val_sid) {
+    if (!txn->txn_id) return;
     ensure_stream_active(txn->stream, txn->start);
     trl_txn_block_add_meta(&txn->stream->blk, txn->txn_id, key_sid, val_sid);
     auto_flush_stream(txn->stream);
 }
 
 void trl_rec_end(trl_txn_t *txn, uint64_t end) {
-    ensure_stream_active(txn->stream, txn->start);
-    trl_txn_block_add_end(&txn->stream->blk, txn->txn_id, end);
-    auto_flush_stream(txn->stream);
+    if (txn->txn_id) {
+        ensure_stream_active(txn->stream, txn->start);
+        trl_txn_block_add_end(&txn->stream->blk, txn->txn_id, end);
+        auto_flush_stream(txn->stream);
+    }
     txn->next_free = txn->db->txn_free;
     txn->db->txn_free = txn;
 }

@@ -1,0 +1,2 @@
+exit: 2
+{"error": "unknown_stream", "message": "no stream with path 'top.env.*'", "name": "top.env.*", "pos": 10, "did_you_mean": ["top.env.seqr", "top.env.axi1.mon", "top.env.axi0.mon"], "hint": "use '~' for a glob: stream ~ 'top.env.*'", "expr": "stream == 'top.env.*'"}

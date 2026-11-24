@@ -15,6 +15,7 @@ from ._codec import (
     encode_field, decode_field,
 )
 from ._native import TrlWriter, TrlReader
+from ._reader import ScopeNode
 from ._ext import ExtBlock
 from ._deps import DependencyGraph, Materializer, DependencyError
 from ._derived import Input, Const, compile_expr
@@ -42,7 +43,7 @@ __all__ = [
     "encode_uvarint", "decode_uvarint",
     "encode_svarint", "decode_svarint",
     "encode_field", "decode_field",
-    "TrlWriter", "TrlReader", "ExtBlock",
+    "TrlWriter", "TrlReader", "ScopeNode", "ExtBlock",
     "DependencyGraph", "Materializer", "DependencyError",
     "Input", "Const", "compile_expr",
     "codec", "VcCodec", "TxnCodec", "Capability", "Store",

@@ -1,0 +1,7 @@
+exit: 2
+--- stderr
+trlog: error: unknown field 'adr'
+  adr == 1
+  ^
+  did you mean: addr, dur
+  hint: run `trlog schema TRACE` to list types and fields

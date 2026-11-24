@@ -90,14 +90,14 @@ int trl_blkout_append(trl_blkout *out, const uint8_t *data, size_t len) {
 int trl_writer_set_vc_codec(trl_writer_t *w, const char *codec_id) {
     if (!w) return -1;
     if (!codec_id) {                       /* revert to the core default */
-        if (w->vc_codec) w->vc_codec->close(w->vc_codec_self);
+        if (w->vc_codec && w->vc_codec->close) w->vc_codec->close(w->vc_codec_self);
         w->vc_codec = NULL;
         w->vc_codec_self = NULL;
         return 0;
     }
     const trl_vc_codec_t *codec = trl_lookup_vc_codec(codec_id);
     if (!codec) return -1;
-    if (w->vc_codec) w->vc_codec->close(w->vc_codec_self);
+    if (w->vc_codec && w->vc_codec->close) w->vc_codec->close(w->vc_codec_self);
     trl_store store = { .writer = w, .reader = NULL };
     w->vc_codec = codec;
     w->vc_codec_self = codec->open_writer ?

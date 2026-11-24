@@ -1,0 +1,2 @@
+exit: 2
+{"error": "unknown_stream", "message": "no stream matches 'top.env.axi9*'", "name": "top.env.axi9*", "did_you_mean": ["top.env.axi1.mon", "top.env.axi0.mon", "top.env.seqr"], "hint": "globs match the full dotted path; run `trlog streams TRACE` to list paths"}

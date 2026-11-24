@@ -53,6 +53,7 @@ def _load_library() -> Optional[ctypes.CDLL]:
     repo_root = Path(__file__).resolve().parents[3]
     candidates.extend(
         [
+            repo_root / "build" / "c" / "libtrl.so",   # CMake default layout
             repo_root / "build" / "libtrl.so",
             repo_root / "c" / "build" / "libtrl.so",
             Path("libtrl.so"),
@@ -73,6 +74,8 @@ _USE_CTYPES = _LIB is not None and os.environ.get("TRL_USE_CTYPES_NATIVE", "0") 
 if _LIB is not None:
     _LIB.trl_writer_open.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
     _LIB.trl_writer_open.restype = ctypes.c_void_p
+    _LIB.trl_writer_set_timezero.argtypes = [ctypes.c_void_p, ctypes.c_int64]
+    _LIB.trl_writer_set_timezero.restype = ctypes.c_int
     _LIB.trl_intern.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
     _LIB.trl_intern.restype = ctypes.c_uint32
     _LIB.trl_add_signal_type.argtypes = [ctypes.c_void_p, ctypes.c_uint8, ctypes.c_uint32, ctypes.c_uint8]
@@ -190,26 +193,32 @@ class _VcContext:
             self._writer._check(_LIB.trl_vc_change_u64(
                 self._writer._handle, var_id, time, _4state_code(value)))
             return
-        if enc is not None and enc[0] == int(SignalEncoding.SE_9STATE):
-            # 9-state encodes binary integers raw (is_binary=1) and symbolic
-            # values ("X"/"Z"/…) as 4-bit nibble codes (is_binary=0) — see
-            # _vc_data._pack_9state. Binary ints take the u64 path (the C encoder
-            # marks any non-BYTES change is_binary). Symbols go through BYTES
-            # carrying the packed nibbles; the C encoder treats a BYTES change as
-            # non-binary only when its length exceeds the raw width, so pad the
-            # packed bytes past that width for narrow signals (e.g. 1-bit).
+        if enc is not None and enc[0] in (int(SignalEncoding.SE_4STATE), int(SignalEncoding.SE_9STATE)):
+            # Multi-bit 4-state and 9-state: a fully known value goes as an int
+            # (is_binary=1, as the pure reference stores it); one with X/Z/...
+            # bits goes as the packed form (2 bits per bit for 4-state, nibbles
+            # for 9-state; see _vc_data._pack_4state / _pack_9state). The C
+            # encoder takes a BYTES change as non-binary only when it is longer
+            # than the raw width, so pad the packed bytes past that width.
+            from ._vc_data import _4STATE_CHARS, _9STATE_CHARS, _as_multistate, _pack_4state, _pack_9state
             bw = enc[1]
-            if isinstance(value, int) and value >= 0:
-                self._writer._check(_LIB.trl_vc_change_u64(
-                    self._writer._handle, var_id, time, value))
-            else:
-                from ._vc_data import _pack_9state
-                packed = _pack_9state(value, bw)
+            is4 = enc[0] == int(SignalEncoding.SE_4STATE)
+            value = _as_multistate(value, bw, _4STATE_CHARS if is4 else _9STATE_CHARS)
+            if not isinstance(value, int):
+                packed = _pack_4state(value, bw) if is4 else _pack_9state(value, bw)
                 binary_bytes = max(1, (bw + 7) // 8)
                 if len(packed) <= binary_bytes:
                     packed = b"\x00" * (binary_bytes + 1 - len(packed)) + packed
                 self._writer._check(_LIB.trl_vc_change_bytes(
                     self._writer._handle, var_id, time, packed, len(packed)))
+                return
+        if isinstance(value, int) and not 0 <= value < 2**64:
+            # Wider than u64 (or negative): send big-endian bytes of the
+            # signal's width; the C encoder keeps the trailing bytes.
+            bw = enc[1] if enc is not None else value.bit_length()
+            nbytes = max(1, (bw + 7) // 8)
+            raw = (value & ((1 << (nbytes * 8)) - 1)).to_bytes(nbytes, "big")
+            self._writer._check(_LIB.trl_vc_change_bytes(self._writer._handle, var_id, time, raw, len(raw)))
             return
         if isinstance(value, float):
             self._writer._check(_LIB.trl_vc_change_real(self._writer._handle, var_id, time, value))
@@ -303,8 +312,6 @@ class _CtypesWriter:
     def __init__(self, path_or_file, timescale_exp: int = -9, timezero: int = 0, compress: bool = True, compressor: str = "zlib") -> None:
         if not isinstance(path_or_file, (str, bytes, os.PathLike)):
             raise TypeError("ctypes TrlWriter requires a filesystem path")
-        if timezero != 0:
-            raise ValueError("ctypes TrlWriter currently supports timezero=0 only")
         if compressor != "zlib":
             raise ValueError("ctypes TrlWriter currently supports only zlib compression")
         self._path = os.fspath(path_or_file)
@@ -312,6 +319,8 @@ class _CtypesWriter:
         if not self._handle:
             raise OSError(f"Failed to open native writer for {self._path}")
         self._closed = False
+        if timezero != 0 and _LIB.trl_writer_set_timezero(self._handle, timezero) != 0:
+            raise OSError(f"Failed to set timezero for {self._path}")
         self._last_vc_start = 0
         # Track signal-type encoding/width so the VC writer can reproduce the
         # pure reference's symbolic-value mapping (e.g. 4-state "X"/"Z").
@@ -367,29 +376,9 @@ class _CtypesWriter:
         self.close()
 
 
-class _CtypesReader:
-    def __init__(self, path_or_file) -> None:
-        if not isinstance(path_or_file, (str, bytes, os.PathLike)):
-            raise TypeError("ctypes TrlReader requires a filesystem path")
-        self._path = os.fspath(path_or_file)
-        self._handle = _LIB.trl_reader_open(os.fsencode(self._path))
-        if not self._handle:
-            raise OSError(f"Failed to open native reader for {self._path}")
-        self._closed = False
-
-    def close(self) -> None:
-        if not self._closed:
-            _LIB.trl_reader_close(self._handle)
-            self._closed = True
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args) -> None:
-        self.close()
-
-
+# Only the writer has a native backend; the pure-Python reader reads files
+# from either writer, so it is always used.
 TrlWriter = _CtypesWriter if _USE_CTYPES else _PyWriter
-TrlReader = _CtypesReader if _USE_CTYPES else _PyReader
+TrlReader = _PyReader
 
 __all__ = ["TrlWriter", "TrlReader"]

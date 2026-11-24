@@ -10,7 +10,7 @@ add_library(trl SHARED
   src/varint.c src/string_table.c src/type_registry.c
   src/hierarchy.c src/vc_data.c src/txn_data.c src/ext.c
   src/index.c src/writer.c src/reader.c src/codec_registry.c
-  src/rec.c src/query.c
+  src/rec.c src/query.c src/qscan.c
 )
 target_include_directories(trl PUBLIC include src)
 target_link_libraries(trl PRIVATE ZLIB::ZLIB ${LZ4_LIBRARY})

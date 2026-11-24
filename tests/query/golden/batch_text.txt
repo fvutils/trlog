@@ -1,0 +1,23 @@
+exit: 0
+== [1] count --by open
+open   count
+false     17
+true       2
+-- 19 matched in 2 groups
+== [2] trlog find TRACE -T msg --last
+t:103  70.000ns  +0ps  top.log  msg  text="timeout waiting for rsp" sev=WARN
+-- 4 matched, showing 1 from offset 3; 19.000ns .. 70.000ns
+== [3] help refs
+References
+
+t:1234          a transaction by id (every result row carries one); taken by
+                show, tree, links and around
+t:1234@15200000 same, with a time hint (accepted, ignored for now)
+@15us           a point in time, for around and active (@15200000 = ticks)
+s:PATH          a stream: use -s PATH (globs allowed) on find/count/around/active
+v:PATH          a signal (phase Q5)
+== [4] around t:31 -n 1 --same-stream
+   -5ns t:30  42.000ns  +3ns    top.env.axi1.mon  axi_wr  addr=0x8000 len=1 resp=SLVERR strb=0xff
+>     0 t:31  47.000ns  +2.5ns  top.env.axi1.mon  axi_rd  addr=0x8004 len=1 resp=DECERR data=0x0 bus=0xzf
+  +15ns t:32  62.000ns  open    top.env.axi1.mon  axi_rd  addr=0xc000
+-- 1 before, 1 after t:31

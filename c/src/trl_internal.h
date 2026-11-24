@@ -69,6 +69,15 @@
 #define TRL_H_VAR 0x03
 #define TRL_H_STREAM 0x04
 #define TRL_H_ATTR 0x05
+#define TRL_H_ATTR2 0x06   /* typed attr: key, u8 attr_type, value */
+
+/* Typed attr value types (python/src/trlog/_types.py AttrType) */
+#define TRL_AT_BOOL 0x00
+#define TRL_AT_I64 0x01
+#define TRL_AT_U64 0x02
+#define TRL_AT_F64 0x03
+#define TRL_AT_STR 0x04
+#define TRL_AT_ARRAY 0x40
 
 #define TRL_TXN_FULL 0x01
 #define TRL_TXN_BEGIN 0x02
@@ -217,6 +226,7 @@ struct trl_writer {
     FILE *fp;
     trl_status_t status;
     int timescale_exp;
+    int64_t timezero;
     trl_compress_t compress;
     trl_string_table_t strtab;
     trl_type_registry_t typereg;
@@ -456,12 +466,13 @@ trl_status_t trl_hierarchy_end_scope(trl_hierarchy_t *hier);
 uint32_t trl_hierarchy_add_var(trl_hierarchy_t *hier, uint32_t name_id, uint32_t sig_type_id, uint8_t dir,
                                uint32_t src_file_str_id, uint32_t src_line);
 uint32_t trl_hierarchy_add_stream(trl_hierarchy_t *hier, uint32_t stream_type_id, uint32_t name_id);
+trl_status_t trl_hierarchy_add_attr(trl_hierarchy_t *hier, uint32_t key_str_id, uint32_t value_str_id);
 /* Like trl_hierarchy_add_stream, but the instance id is supplied by the
  * caller instead of coming from hier->next_stream_id. Used by the session
  * layer (rec.c), whose stream instance ids are assigned once, up front, by a
  * db-wide counter, and must stay stable across several lazily-flushed
- * hierarchy blocks (each flush is a fresh trl_hierarchy_begin, which would
- * otherwise restart the auto-increment at 1 and collide with earlier ids). */
+ * hierarchy blocks. next_stream_id is moved past the given id, so auto ids
+ * handed out later do not collide with it. */
 trl_status_t trl_hierarchy_add_stream_explicit(trl_hierarchy_t *hier, uint32_t stream_inst_id,
                                                uint32_t stream_type_id, uint32_t name_id);
 trl_status_t trl_hierarchy_encode_block(const trl_hierarchy_t *hier, trl_compress_t compress, trl_buf_t *out);

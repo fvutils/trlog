@@ -1,0 +1,21 @@
+exit: 0
+file         TRACE
+version      2.1
+time unit    ps (10^-12 s)
+span         1.000ns .. 70.000ns  (1000 .. 70000)
+txns         19 (2 open)
+streams      4
+types        4
+signals      0
+hierarchies  design
+blocks       8 txn, 0 vc
+index        yes, query index: no
+engine       *
+meta tool    query_corpus
+meta seed    1
+try next:
+  trlog streams TRACE
+  trlog schema TRACE
+  trlog count TRACE --by stream,type
+  trlog find TRACE -T axi_rd --limit 5
+  trlog find TRACE open

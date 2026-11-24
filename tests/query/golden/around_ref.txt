@@ -1,0 +1,7 @@
+exit: 0
+    -5ns t:30   42.000ns  +3ns    top.env.axi1.mon  axi_wr    addr=0x8000 len=1 resp=SLVERR strb=0xff
+  -1.5ns t:101  45.500ns  +0ps    top.log           msg       text="slave error at 0x8000" sev=ERROR
+>      0 t:31   47.000ns  +2.5ns  top.env.axi1.mon  axi_rd    addr=0x8004 len=1 resp=DECERR data=0x0 bus=0xzf
+  +3.5ns t:102  50.500ns  +0ps    top.log           msg       text="decode error" sev=ERROR
+   +14ns t:4    61.000ns  open    top.env.seqr      seq_item  name=hang prio=0
+-- 2 before, 2 after t:31; more before and after (-n 4)

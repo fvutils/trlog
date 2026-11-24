@@ -60,8 +60,21 @@ def _mask(width: int) -> int:
 # ---------------------------------------------------------------------------
 
 class Expr:
-    """Base for the small derived-expression DSL. Operators build an AST that
-    :func:`compile_expr` lowers to post-order bytecode."""
+    """Base class of derived-signal expressions.
+
+    Build expressions from :class:`Input` and :class:`Const` with these
+    operators and methods. Values are unsigned integers; ``int`` operands
+    are converted to :class:`Const`.
+
+    * ``a & b``, ``a | b``, ``a ^ b``: bitwise AND, OR, XOR.
+    * ``~a``: bitwise NOT (masked to the result width).
+    * ``a.lnot()``: 1 if ``a`` is 0, else 0.
+    * ``a.eq(b)``, ``a.ne(b)``: 1 if equal / not equal, else 0.
+    * ``a.shl(k)``, ``a.shr(k)``: shift by the constant ``k``.
+    * ``a.reduce_and(w)``, ``a.reduce_or(w)``: AND / OR of the low ``w`` bits.
+    * ``a.slice_(lo, w)``: ``w`` bits of ``a`` starting at bit ``lo``.
+    * ``a.concat(b, wb)``: ``(a << wb) | (b & (2**wb - 1))``.
+    """
 
     def __and__(self, o): return BinOp(OP_AND, self, _wrap(o))
     def __or__(self, o):  return BinOp(OP_OR, self, _wrap(o))
@@ -85,10 +98,12 @@ def _wrap(o):
 
 @dataclass
 class Input(Expr):
+    """The current value of the ``idx``-th input of a derived signal."""
     idx: int
 
 @dataclass
 class Const(Expr):
+    """An integer constant."""
     value: int
 
 @dataclass
@@ -128,7 +143,15 @@ class ConcatOp(Expr):
 
 
 def compile_expr(expr: Expr) -> bytes:
-    """Lower an expression AST to post-order bytecode."""
+    """Compile an expression to the bytecode stored in the trace file.
+
+    Args:
+        expr: Expression built from :class:`Input`, :class:`Const` and the
+            :class:`~trlog._derived.Expr` operators.
+
+    Returns:
+        The bytecode.
+    """
     out = bytearray()
 
     def emit(node: Expr) -> None:

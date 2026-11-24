@@ -1,0 +1,2 @@
+exit: 2
+{"error": "bad_time", "message": "bad time window '10qq': use A..B, ..B, A.., @T or @T±W (for example 10us..20us)", "value": "10qq"}

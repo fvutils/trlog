@@ -1,4 +1,4 @@
-// top_smoke.sv — Verilator DPI smoke test for the L2 trlog_pkg (phase 4).
+// top_smoke.sv — Verilator DPI smoke test for the L2 trl_pkg (phase 4).
 //
 // Records one tier-2 (open_txn/set_int/meta/close) and one tier-1 (record())
 // transaction, closes the database, then reopens it read-only and walks the
@@ -7,14 +7,14 @@
 
 `default_nettype none
 
-import trlog_pkg::*;
+import trl_pkg::*;
 
 module top_smoke;
 
     initial begin
-        trlog_pkg::stream   s;
-        trlog_pkg::type_h   t;
-        trlog_pkg::txn      x1;
+        trl_stream s;
+        trl_type   t;
+        trl_txn    x1;
         int f_a, f_b;
         int key_sid, val_sid;
         longint unsigned t1_id, t2_id;
@@ -25,24 +25,24 @@ module top_smoke;
         n_ok = 0;
         n_fail = 0;
 
-        if (!trlog_pkg::enabled()) begin
+        if (!trl_enabled()) begin
             $display("SMOKE: FAIL recording not enabled (pass +trlog_file=<path>)");
             $finish;
         end
 
-        t = trlog_pkg::type_h::create("pkt");
-        f_a = t.add_field("a", trlog_pkg::K_U32);
-        f_b = t.add_field("b", trlog_pkg::K_U32);
+        t = trl_type::create("pkt");
+        f_a = t.add_field("a", TRL_FT_U32);
+        f_b = t.add_field("b", TRL_FT_U32);
         t.seal();
 
-        s = trlog_pkg::stream::create("s", null, t);
+        s = trl_stream::create("s", null, t);
         if (s == null || !s.en) begin
             $display("SMOKE: FAIL stream create/enabled");
             $finish;
         end
 
         begin
-            trlog_pkg::db d = trlog_pkg::db::get();
+            trl_db d = trl_db::get();
             key_sid = d.intern("trlog.origin.component");
             val_sid = d.intern("sv_smoke");
         end
@@ -58,17 +58,17 @@ module top_smoke;
         vals[1] = 43;
         t2_id = s.record(200, 210, vals, t);
 
-        trlog_pkg::shutdown();
+        trl_shutdown();
 
         // --- read it back ---
         begin
-            trlog_pkg::reader    r;
-            trlog_pkg::cursor    c;
+            trl_reader r;
+            trl_cursor c;
             string path;
             int n;
 
             void'($value$plusargs("trlog_file=%s", path));
-            r = trlog_pkg::reader::open("smoke_r", path);
+            r = trl_reader::open("smoke_r", path);
             if (r == null) begin
                 $display("SMOKE: FAIL reader open");
                 $finish;
@@ -76,7 +76,7 @@ module top_smoke;
 
             if (r.num_streams() == 1) n_ok++; else begin n_fail++; $display("SMOKE: FAIL num_streams"); end
 
-            c = trlog_pkg::cursor::create(r, null, 0, 64'hFFFF_FFFF_FFFF_FFFF);
+            c = trl_cursor::create(r, null, 0, 64'hFFFF_FFFF_FFFF_FFFF);
             if (c == null) begin
                 $display("SMOKE: FAIL cursor create");
                 $finish;

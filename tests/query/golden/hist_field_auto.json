@@ -1,0 +1,2 @@
+exit: 0
+{"cmd": "hist", "query": {"value": "len"}, "time_unit": "ps", "value_is_time": false, "summary": {"matched": 19, "n": 10, "missing": 1, "min": 1, "max": 4, "bins": 4, "peak": 5}, "bin": 1, "results": [{"lo": 1, "hi": 2, "count": 3}, {"lo": 2, "hi": 3, "count": 1}, {"lo": 3, "hi": 4, "count": 1}, {"lo": 4, "hi": 5, "count": 5}], "scan": {"blocks_read": 8, "blocks_skipped": 0, "ms": 0, "index": true, "qindex": false}}

@@ -1,0 +1,7 @@
+exit: 0
+t:3   41.000ns  +19ns  top.env.seqr      seq_item  name=err_test prio=5
+      link out cause t:30 (stimulus)
+t:30  42.000ns  +3ns   top.env.axi1.mon  axi_wr    addr=0x8000 len=1 resp=SLVERR strb=0xff
+      link in cause t:3 (stimulus)
+      link out cause t:101 (resp)
+-- 2 matched; 41.000ns .. 60.000ns

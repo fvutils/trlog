@@ -1,0 +1,4 @@
+exit: 2
+--- stderr
+trlog: error: unknown verb 'fnd'
+  did you mean: find

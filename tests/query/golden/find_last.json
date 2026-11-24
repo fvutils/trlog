@@ -1,0 +1,2 @@
+exit: 0
+{"cmd": "find", "query": {"types": ["msg"]}, "time_unit": "ps", "summary": {"matched": 4, "returned": 1, "truncated": false, "span": [19000, 70000], "by_stream": {"top.log": 4}}, "results": [{"ref": "t:103", "stream": "top.log", "type": "msg", "start": 70000, "dur": 0, "fields": {"text": "timeout waiting for rsp", "sev": "WARN"}}], "next": null, "scan": {"blocks_read": 8, "blocks_skipped": 0, "ms": 0, "index": true, "qindex": false}}

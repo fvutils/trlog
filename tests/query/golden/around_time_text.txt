@@ -1,0 +1,12 @@
+exit: 0
+   -4ns t:3    41.000ns  +19ns   top.env.seqr      seq_item  name=err_test prio=5
+               link out cause t:30 (stimulus)
+   -3ns t:30   42.000ns  +3ns    top.env.axi1.mon  axi_wr    addr=0x8000 len=1 resp=SLVERR strb=0xff
+               link in cause t:3 (stimulus)
+               link out cause t:101 (resp)
+-- @45.000ns
+ +500ps t:101  45.500ns  +0ps    top.log           msg       text="slave error at 0x8000" sev=ERROR
+               link in cause t:30 (resp)
+   +2ns t:31   47.000ns  +2.5ns  top.env.axi1.mon  axi_rd    addr=0x8004 len=1 resp=DECERR data=0x0 bus=0xzf
+               link out cause t:102 (resp)
+-- 2 before, 2 after @45.000ns; more before and after (-n 4)

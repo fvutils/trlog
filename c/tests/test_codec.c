@@ -10,6 +10,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <stdlib.h>
+#include <unistd.h>
+
+#include "trl/trl.h"
 #include "trl/trl_codec.h"
 
 static int g_failures = 0;
@@ -65,6 +69,28 @@ int main(void) {
 
     /* NULL / malformed registration is rejected. */
     EXPECT(trl_register_vc_codec(NULL) != 0);
+
+    /* A codec that leaves open_writer/finalize/close NULL can be selected,
+     * deselected, and used through trl_writer_close without crashing. */
+    {
+        char path[] = "/tmp/test_codec_nulls_XXXXXX";
+        int fd = mkstemp(path);
+        EXPECT(fd >= 0);
+        if (fd >= 0) close(fd);
+        trl_writer_t *w = trl_writer_open(path, -9, TRL_COMPRESS_NONE);
+        EXPECT(w != NULL);
+        if (w) {
+            EXPECT(trl_writer_set_vc_codec(w, "com.example.codec.dummy") == 0);
+            EXPECT(trl_writer_set_vc_codec(w, NULL) == 0);
+            EXPECT(trl_writer_set_vc_codec(w, "com.example.codec.dummy") == 0);
+            EXPECT(trl_writer_set_vc_codec(w, "com.example.codec.dummy") == 0);
+            trl_vc_begin(w, 0);
+            trl_vc_change_u64(w, 0, 0, 1);
+            EXPECT(trl_vc_flush(w) == TRL_OK);
+            EXPECT(trl_writer_close(w) == TRL_OK);
+        }
+        remove(path);
+    }
 
     printf("test_codec: %s (failures=%d)\n", g_failures ? "FAIL" : "PASS", g_failures);
     return g_failures ? 1 : 0;

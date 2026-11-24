@@ -21,7 +21,17 @@ from ._exceptions import ZstFormatError
 
 
 class HierarchyBlock:
-    """Builds or holds a single named hierarchy tree."""
+    """One hierarchy, as returned in :attr:`~trlog.TrlReader.hierarchies`.
+
+    Attributes:
+        header: :class:`~trlog.HierarchyHeader` with ``hier_id``, ``kind``
+            and ``name_str_id``.
+        vars: Variable ID to :class:`~trlog.HVar`.
+        streams: Stream instance ID to :class:`~trlog.HStream`.
+
+    The writer builds hierarchies through the builder returned by
+    :meth:`~trlog.TrlWriter.begin_hierarchy`, not through this class directly.
+    """
 
     def __init__(
         self,
@@ -42,6 +52,7 @@ class HierarchyBlock:
 
     @property
     def hier_id(self) -> int:
+        """The hierarchy ID."""
         return self.header.hier_id
 
     # ------------------------------------------------------------------
